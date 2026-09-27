@@ -6170,7 +6170,8 @@ export class FloorplanCardEditor extends LitElement {
         }
         this._applyElementPatch("item", it.id, patch, live);
       };
-      const effects = itemEffectsForm(it, deviceClass);
+      const entityState = it.entity ? this.hass?.states[it.entity] : undefined;
+      const effects = itemEffectsForm(it, deviceClass, entityState);
       return html`
         ${this._renderGroup("Identity", this._renderForm(itemIdentityForm(it), apply))}
         ${this._renderGroup(

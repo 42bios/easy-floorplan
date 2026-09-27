@@ -147,6 +147,7 @@ import {
   renderAreaBorder,
   WALL_THICKNESS,
   areaColor,
+  entitySupportsGlow,
   glowPaint,
   lightBadgePaint,
   editorGlowPaint,
@@ -4782,6 +4783,33 @@ describe("shutterStyleOf (issue #74)", () => {
 
   it("defaults to roll with nothing bound, so existing configs are untouched", () => {
     expect(shutterStyleOf({})).toBe("roll");
+  });
+});
+
+describe("entitySupportsGlow", () => {
+  const entity = (state: string, attributes: Record<string, unknown> = {}) => ({ state, attributes });
+
+  it("a light supports a pool through its colour modes, even while off or unavailable", () => {
+    expect(entitySupportsGlow(entity("off", { supported_color_modes: ["onoff"] }))).toBe(true);
+    expect(entitySupportsGlow(entity("unavailable", { supported_color_modes: ["brightness"] }))).toBe(true);
+    expect(entitySupportsGlow(entity("on", { supported_color_modes: ["hs", "color_temp"] }))).toBe(true);
+  });
+
+  it("a switch supports a pool because on and off are its whole state", () => {
+    expect(entitySupportsGlow(entity("off"))).toBe(true);
+    expect(entitySupportsGlow(entity("on"))).toBe(true);
+    expect(entitySupportsGlow(entity("on", { device_class: "outlet" }))).toBe(true);
+    expect(entitySupportsGlow(entity("off", { device_class: "switch" }))).toBe(true);
+    expect(entitySupportsGlow(entity("unavailable", { device_class: "outlet" }))).toBe(true);
+  });
+
+  it("a reading does not, whatever its current state", () => {
+    expect(entitySupportsGlow(entity("21.5", { unit_of_measurement: "°C", device_class: "temperature" }))).toBe(false);
+    expect(entitySupportsGlow(entity("on", { device_class: "motion" }))).toBe(false);
+    expect(entitySupportsGlow(entity("on", { device_class: "door" }))).toBe(false);
+    expect(entitySupportsGlow(entity("off", { hvac_modes: ["off", "heat"] }))).toBe(false);
+    expect(entitySupportsGlow(entity("open"))).toBe(false);
+    expect(entitySupportsGlow(undefined)).toBe(false);
   });
 });
 
