@@ -1,7 +1,9 @@
 import { afterEach, describe, expect, it } from "vitest";
+import { userEvent } from "@vitest/browser/context";
 import "./floorplan-card";
 import type { FloorplanCard } from "./floorplan-card";
 import type { FloorplanCardConfig, Furniture } from "./types";
+import { MIN_TOUCH_TARGET } from "./types";
 
 afterEach(() => { document.body.innerHTML = ""; });
 
@@ -19,15 +21,23 @@ async function mount(view: "2d" | "3d", piece: Partial<Furniture>, rotation = 0)
   card.hass = { states: {}, entities: {} } as FloorplanCard["hass"];
   document.body.append(card);
   await card.updateComplete;
+  // The assertions inspect settled room geometry, independent of motion preferences.
+  const style = document.createElement("style");
+  style.textContent = ".plan-zoom, .fp-furniture-link { transition: none !important; }";
+  card.shadowRoot!.append(style);
   await new Promise(requestAnimationFrame);
   return card;
 }
 
-async function clickSurface(card: FloorplanCard) {
+function surfacePoint(card: FloorplanCard, x = 0) {
   const glyph = card.shadowRoot!.querySelector<SVGGElement>(".fp-furniture")!;
-  const p = new DOMPoint(0, 0).matrixTransform(glyph.getScreenCTM()!);
-  // Use Chromium hit testing, not an event sent directly to the Area. The old
-  // code's glyph has no listener but still wins this hit and swallows the tap.
+  return new DOMPoint(x, 0).matrixTransform(glyph.getScreenCTM()!);
+}
+
+async function clickSurface(card: FloorplanCard, x = 0) {
+  const p = surfacePoint(card, x);
+  // Chromium chooses the target; dispatching directly to the Area would hide
+  // a furniture surface or an oversized invisible badge swallowing the tap.
   const target = card.shadowRoot!.elementFromPoint(p.x, p.y)!;
   expect(target).not.toBeNull();
   target.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, clientX: p.x, clientY: p.y }));
@@ -36,32 +46,116 @@ async function clickSurface(card: FloorplanCard) {
   return target;
 }
 
+function icon(card: FloorplanCard) {
+  return card.shadowRoot!.querySelector<HTMLElement>(".fp-furniture-link")!;
+}
+
+function recordActions(card: FloorplanCard) {
+  const actions: Event[] = [];
+  card.addEventListener("ll-custom", e => actions.push(e));
+  return actions;
+}
+
+const fire = { action: "fire-dom-event" } as const;
+
 describe("furniture hit testing (#323)", () => {
   for (const view of ["2d", "3d"] as const) {
     for (const rotation of [0, 90, 180, 270]) {
-      it(`${view}, rotation ${rotation}: decorative furniture lets the Area receive the tap`, async () => {
+      it(`${view}, rotation ${rotation}: decorative furniture has no icon and passes taps to the Area`, async () => {
         const card = await mount(view, {}, rotation);
+        expect(icon(card)).toBeNull();
         const target = await clickSurface(card);
         expect(target.closest(".area-tap-target")).not.toBeNull();
         expect(card.shadowRoot!.querySelector(".zoom-out")).not.toBeNull();
       });
+
+      it(`${view}, rotation ${rotation}: actionable surfaces pass through beside an aligned icon`, async () => {
+        for (const piece of [{ tap_action: fire }, { hold_action: fire }, { double_tap_action: fire }]) {
+          const card = await mount(view, piece, rotation);
+          const actions = recordActions(card);
+          const box = icon(card).getBoundingClientRect();
+          const centre = surfacePoint(card);
+          expect(box.x + box.width / 2).toBeCloseTo(centre.x, 1);
+          expect(box.y + box.height / 2).toBeCloseTo(centre.y, 1);
+          expect(box.width).toBeCloseTo(MIN_TOUCH_TARGET, 1);
+          const target = await clickSurface(card, 55);
+          expect(target.closest(".area-tap-target")).not.toBeNull();
+          expect(card.shadowRoot!.querySelector(".zoom-out")).not.toBeNull();
+          expect(actions).toHaveLength(0);
+          card.remove();
+        }
+      });
     }
-    it(`${view}: explicit none and unusable actions let room taps through`, async () => {
-      for (const tap_action of [{ action: "none" }, { action: "more-info" }]) {
-        const card = await mount(view, { tap_action } as Partial<Furniture>);
-        await clickSurface(card);
-        expect(card.shadowRoot!.querySelector(".zoom-out")).not.toBeNull();
+
+    it(`${view}: explicit none and unusable gestures have no icon and pass through`, async () => {
+      for (const gesture of ["tap_action", "hold_action", "double_tap_action"]) {
+        for (const action of ["none", "more-info", "navigate", "call-service"]) {
+          const card = await mount(view, { [gesture]: { action } });
+          expect(icon(card)).toBeNull();
+          await clickSurface(card);
+          expect(card.shadowRoot!.querySelector(".zoom-out")).not.toBeNull();
+          card.remove();
+        }
+      }
+    });
+
+    it(`${view}: clicking the visible icon runs the action without zooming`, async () => {
+      const card = await mount(view, { tap_action: fire });
+      const actions = recordActions(card);
+      const p = surfacePoint(card);
+      expect(card.shadowRoot!.elementFromPoint(p.x, p.y)?.closest(".fp-furniture-link")).toBe(icon(card));
+      await userEvent.click(icon(card));
+      expect(actions).toHaveLength(1);
+      expect(card.shadowRoot!.querySelector(".zoom-out")).toBeNull();
+    });
+
+    it(`${view}: hold and double-tap icons run only their configured pointer gesture`, async () => {
+      for (const gesture of ["hold_action", "double_tap_action"] as const) {
+        const card = await mount(view, { [gesture]: fire });
+        const actions = recordActions(card);
+        expect(icon(card).getAttribute("title")).toContain(gesture === "hold_action" ? "Hold" : "Double-tap");
+        expect(icon(card).querySelector("ha-icon")?.getAttribute("icon")).toBe(
+          gesture === "hold_action" ? "mdi:gesture-tap-hold" : "mdi:gesture-double-tap");
+        await userEvent.click(icon(card));
+        await new Promise(resolve => setTimeout(resolve, 280));
+        expect(actions).toHaveLength(0);
+        if (gesture === "hold_action") await userEvent.click(icon(card), { delay: 550 });
+        else await userEvent.dblClick(icon(card));
+        expect(actions).toHaveLength(1);
+        expect(card.shadowRoot!.querySelector(".zoom-out")).toBeNull();
         card.remove();
       }
     });
-    it(`${view}: a configured action still receives the tap instead of zooming`, async () => {
-      const card = await mount(view, { tap_action: { action: "fire-dom-event" } });
-      const actions: Event[] = [];
-      card.addEventListener("ll-custom", e => actions.push(e));
-      const target = await clickSurface(card);
-      expect(target.closest(".fp-furniture-link")).not.toBeNull();
-      expect(actions).toHaveLength(1);
+
+    it(`${view}: keyboard activation stays a single tap even when other gestures exist`, async () => {
+      const card = await mount(view, {
+        tap_action: fire,
+        hold_action: { action: "more-info", entity: "light.held" },
+        double_tap_action: { action: "more-info", entity: "light.double" },
+      });
+      const actions = recordActions(card);
+      const unexpected: Event[] = [];
+      card.addEventListener("hass-more-info", event => unexpected.push(event));
+      icon(card).focus();
+      expect(card.shadowRoot!.activeElement).toBe(icon(card));
+      await userEvent.keyboard("{Enter} ");
+      await new Promise(resolve => setTimeout(resolve, 280));
+      expect(actions).toHaveLength(2);
+      expect(unexpected).toEqual([]);
       expect(card.shadowRoot!.querySelector(".zoom-out")).toBeNull();
+    });
+
+    it(`${view}: the visible target stays finger-sized after resizing and room zoom`, async () => {
+      const card = await mount(view, { tap_action: fire });
+      card.style.width = "320px";
+      expect(icon(card).getBoundingClientRect().width).toBeCloseTo(MIN_TOUCH_TARGET, 1);
+      await clickSurface(card, 60);
+      expect(card.shadowRoot!.querySelector(".zoom-out")).not.toBeNull();
+      expect(icon(card).getBoundingClientRect().width).toBeCloseTo(MIN_TOUCH_TARGET, 1);
+      const actions = recordActions(card);
+      await userEvent.click(icon(card));
+      expect(actions).toHaveLength(1);
+      expect(card.shadowRoot!.querySelector(".zoom-out")).not.toBeNull();
     });
   }
 });
