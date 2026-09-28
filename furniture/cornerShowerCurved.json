@@ -2,9 +2,19 @@
   "id": "cornerShowerCurved",
   "name": "curved corner shower",
   "category": "bath",
-  "keywords": ["shower", "corner", "cubicle", "stall", "dusche"],
+  "keywords": ["shower", "corner", "cubicle", "stall", "dusche", "glass", "enclosure", "bruseafskærmning"],
   "size": { "w": 100, "h": 100 },
   "parts": [
-    { "path": [["M", 100, 0], ["L", 100, 100], ["L", 94, 100], ["C", 47, 105, -5, 53, 0, 6], ["L", 0, 0], ["Z"]], "role": "body" }
+    { "path": [["M", 100, 0], ["L", 100, 100], ["L", 94, 100], ["C", 47, 105, -5, 53, 0, 6], ["L", 0, 0], ["Z"]], "role": "body" },
+    { "path": [["M", 6, 8], ["C", 6, 30, 15, 51, 30, 66]], "role": "thin" },
+    { "path": [["M", 34, 70], ["C", 50, 85, 71, 94, 92, 94]], "role": "thin" },
+    { "rect": [2, 2, 8, 7], "role": "body" },
+    { "rect": [91, 90, 7, 8], "role": "body" },
+    { "line": [26, 61, 19, 67], "role": "thin" },
+    { "circle": [18, 68, 2.5], "role": "solid" },
+    { "line": [39, 74, 33, 81], "role": "thin" },
+    { "circle": [32, 82, 2.5], "role": "solid" },
+    { "rect": [69, 20, 12, 12], "rx": 1, "role": "detail" },
+    { "repeat": 3, "step": [3, 0], "part": { "line": [72, 23, 72, 29], "role": "hint" } }
   ]
 }
