@@ -49,6 +49,7 @@ import {
   WALL_THICKNESS,
   badgeContentOf,
   domainIconAnimation,
+  entitySupportsGlow,
   isRippleEntity,
   normalizeOverlayScale,
   normalizeOverlayMinWidth,
@@ -74,6 +75,7 @@ import {
   openingSash,
   defaultSash,
   openingIsGlazed,
+  openingIsPassage,
 } from "./render";
 import { normalizeProjection, normalizeWallHeight, normalizeWallOpacity, MAX_WALL_HEIGHT } from "./projection";
 import { defaultItemAction } from "./actions";
@@ -250,14 +252,25 @@ export function openingForm(o: Opening, featuresOf: (entityId: string) => number
   //
   // What it gains is a second side and a ceiling height — see below.
   const skylight = o.type === "skylight";
+  // A passage is the gap with nothing in it (issue #309), so it skips every
+  // question below that describes what fills one: motion, leaves and their
+  // width, glass, hinge, which side it opens to, and the invert that flips a
+  // sensor's reading of a leaf. What it keeps is what any opening has without
+  // a leaf — a length, the sunlight switch, an entity to badge and act on.
+  const passage = openingIsPassage(o);
   const fields: FormField[] = [
     {
       name: "type",
       label: "Type",
-      selector: dropdown(opt("door", "Door"), opt("window", "Window"), opt("skylight", "Skylight")),
+      selector: dropdown(
+        opt("door", "Door"),
+        opt("passage", "Passage (no door)"),
+        opt("window", "Window"),
+        opt("skylight", "Skylight")
+      ),
     },
   ];
-  if (!skylight) {
+  if (!skylight && !passage) {
     fields.push({
       name: "motion",
       label: "Motion",
@@ -313,7 +326,7 @@ export function openingForm(o: Opening, featuresOf: (entityId: string) => number
   // Leaf count, for anything hinged. Offered on doors too: a double door is
   // as ordinary as a double casement, and was previously undrawable — every
   // door came out as one leaf spanning the whole opening, however wide.
-  if (!skylight && motion === "swing") {
+  if (!skylight && !passage && motion === "swing") {
     const door = o.type === "door";
     fields.push({
       name: "sash",
@@ -336,7 +349,7 @@ export function openingForm(o: Opening, featuresOf: (entityId: string) => number
   // case, and `renderOpening` already draws that remainder as a solid panel
   // rather than glass — so the only thing that would be window-only here is
   // the wording, which is why the wording is what varies.
-  if (motion === "swing" && openingSash(o) === "single") {
+  if (!passage && motion === "swing" && openingSash(o) === "single") {
     fields.push({
       name: "sashSpan",
       label: o.type === "door" ? "Leaf width" : "Sash width",
@@ -379,14 +392,14 @@ export function openingForm(o: Opening, featuresOf: (entityId: string) => number
   });
   // Hinge applies to anything with ONE hinged leaf. A double is hinged at both
   // jambs, so there is no side left to choose.
-  if (motion === "swing" && openingSash(o) === "single") {
+  if (!passage && motion === "swing" && openingSash(o) === "single") {
     fields.push({
       name: "hinge",
       label: "Hinge",
       selector: dropdown(opt("left", "Left"), opt("right", "Right")),
     });
   }
-  if (!skylight && motion === "swing") {
+  if (!skylight && !passage && motion === "swing") {
     fields.push({
       name: "opens",
       label: "Opens",
@@ -405,7 +418,7 @@ export function openingForm(o: Opening, featuresOf: (entityId: string) => number
       selector: dropdown(opt("this", "Top edge"), opt("other", "Bottom edge")),
     });
   }
-  if (!skylight && motion === "slide") {
+  if (!skylight && !passage && motion === "slide") {
     // A two-panel slider moves both ways at once, so there is no direction to
     // pick — `flipH` only swaps which panel each sensor drives (issue #145).
     if (!twoLeaves) {
@@ -441,9 +454,11 @@ export function openingForm(o: Opening, featuresOf: (entityId: string) => number
     // what the card does.
     helper: skylight
       ? "Contact or cover for the sash. A roof window keeps its type whatever the entity's device class says"
-      : twoLeaves
-        ? "Contact, cover or lock. Drives the first leaf; type and motion follow its device class"
-        : "Contact, cover or lock — a lock reads unlocked as open. Type and motion follow its device class",
+      : passage
+        ? "Optional. A passage is always open, so this only badges it and takes its tap actions"
+        : twoLeaves
+          ? "Contact, cover or lock. Drives the first leaf; type and motion follow its device class"
+          : "Contact, cover or lock — a lock reads unlocked as open. Type and motion follow its device class",
     selector: { entity: { filter: [{ domain: OPENING_ENTITY_DOMAINS }] } },
   });
   // One sensor per leaf (issues #145, #159). Only a two-leaved opening has a
@@ -525,24 +540,26 @@ export function openingForm(o: Opening, featuresOf: (entityId: string) => number
   // sensor reading counts as open; without one, it flips the type default a
   // door or window draws with no sensor to ask (openingDefaultOpen) — so an
   // unbound door can be drawn shut, or an unbound window drawn open.
-  fields.push({
-    name: "invert",
-    label:
-      o.type === "door"
-        ? "Invert door animation"
-        : skylight
-          ? "Invert skylight animation"
-          : "Invert window animation",
-    helper: o.entity
-      ? undefined
-      : // Only a swing door draws open with no sensor to ask
-        // (openingDefaultOpen) — everything else, door, window or roof light,
-        // draws shut.
-        o.type === "door" && openingMotion(o) === "swing"
-        ? "No sensor bound — draws shut instead of open"
-        : "No sensor bound — draws open instead of shut",
-    selector: { boolean: {} },
-  });
+  if (!passage) {
+    fields.push({
+      name: "invert",
+      label:
+        o.type === "door"
+          ? "Invert door animation"
+          : skylight
+            ? "Invert skylight animation"
+            : "Invert window animation",
+      helper: o.entity
+        ? undefined
+        : // Only a swing door draws open with no sensor to ask
+          // (openingDefaultOpen) — everything else, door, window or roof light,
+          // draws shut.
+          o.type === "door" && openingMotion(o) === "swing"
+          ? "No sensor bound — draws shut instead of open"
+          : "No sensor bound — draws open instead of shut",
+      selector: { boolean: {} },
+    });
+  }
   fields.push(angleField());
   // The opening's own badge (issue #154 follow-up). Offered for any bound
   // opening, but sold on the case that needs it: a raised roll-up has nothing
@@ -607,7 +624,13 @@ export function openingForm(o: Opening, featuresOf: (entityId: string) => number
       selector: dropdown(
         opt(
           "opening",
-          o.type === "door" ? "The door" : skylight ? "The skylight" : "The window"
+          o.type === "door"
+            ? "The door"
+            : skylight
+              ? "The skylight"
+              : passage
+                ? "The passage"
+                : "The window"
         ),
         opt("shutter", skylight ? "The blind" : "The shutter")
       ),
@@ -853,6 +876,23 @@ export function openingForm(o: Opening, featuresOf: (entityId: string) => number
             out.shutterStyle = undefined;
             out.shutterFlipV = undefined;
             out.shutterSecondaryEntity = undefined;
+          }
+          // A door turned into a passage has lost its leaf (issue #309), and
+          // everything that described the leaf goes with it: left behind it
+          // is hidden from the form and would come back as a hinge, a slider
+          // or an inverted sensor the day the gap became a door again. Both
+          // ways, as for the skylight: a hand-written passage can carry a
+          // leaf it is ignoring, and it would wake the moment the passage
+          // became a door. The shutter stays — it hangs over the gap, not off
+          // the leaf — and so does `flipH`, for the reason given above.
+          if (v === "passage" || passage) {
+            out.motion = undefined;
+            out.sliderStyle = undefined;
+            out.sashSpan = undefined;
+            out.sash = undefined;
+            out.secondaryEntity = undefined;
+            out.glazed = undefined;
+            out.invert = undefined;
           }
         }
         else out[k] = v;
@@ -1278,21 +1318,28 @@ export function itemBadgeForm(it: FloorItem, badgeSource?: BadgeSourceInfo): For
 /**
  * Group 6: the optional visual extras, each offered only where it means
  * something — a ring on a thermostat says "someone is here", which is a lie,
- * and nothing but a light has a colour to cast.
+ * and a pool of colour belongs to an entity that can actually be on.
  *
  * Returns `undefined` when this device qualifies for neither, so the editor
  * can leave the whole group out rather than print an empty heading.
  *
- * `deviceClass` is the entity's HA device class, resolved off `hass` at the
- * call site as the openings already do theirs: it is what separates a motion
- * sensor from a door contact, and so decides whether the ring is offered at
- * all (issue #127).
+ * `deviceClass` and `entity` are resolved off `hass` at the call site, as the
+ * openings already do theirs. The class separates a motion sensor from a door
+ * contact, and so decides whether the ring is offered at all (issue #127).
+ * The state object is what {@link entitySupportsGlow} reads — colour modes, or
+ * a plain on/off state — rather than the entity's domain.
  */
-export function itemEffectsForm(it: FloorItem, deviceClass?: string): FormSpec | undefined {
+export function itemEffectsForm(
+  it: FloorItem,
+  deviceClass?: string,
+  entity?: { state?: string; attributes?: Record<string, unknown> } | null,
+): FormSpec | undefined {
   const ripple = itemHasRipple(it);
   const canRipple = isRippleEntity(it.entity, deviceClass);
-  const lights = it.kind === "light" || it.entity?.startsWith("light.");
-  if (!canRipple && !lights) return undefined;
+  // A pool already turned on stays editable when the entity has dropped out
+  // of hass, so the control that turns it off does not vanish with it.
+  const casts = entitySupportsGlow(entity) || !!it.glow;
+  if (!canRipple && !casts) return undefined;
   const fields: FormField[] = [];
   if (canRipple) {
     fields.push({
@@ -1329,7 +1376,7 @@ export function itemEffectsForm(it: FloorItem, deviceClass?: string): FormSpec |
       });
     }
   }
-  if (lights) {
+  if (casts) {
     fields.push({
       name: "glow",
       label: "Cast light",
@@ -1641,6 +1688,11 @@ export function itemGroup7aForm(it: FloorItem): FormSpec {
 }
 /** Group 7: when the device is drawn at all, and what a press does. */
 export function itemBehaviourForm(it: FloorItem): FormSpec {
+  // HA's action editor has no entity field for more-info. The card already
+  // opens `tap_action.entity` when one is set, so the editor asks for it here,
+  // beside the dropdown, and only while a tap actually opens more-info.
+  const tapOpensMoreInfo =
+    (it.tap_action?.action ?? defaultItemAction(it.entity).action) === "more-info";
   return {
     fields: [
       {
@@ -1654,6 +1706,16 @@ export function itemBehaviourForm(it: FloorItem): FormSpec {
         label: "Tap action",
         selector: { ui_action: { default_action: defaultItemAction(it.entity).action } },
       },
+      ...(tapOpensMoreInfo
+        ? [
+            {
+              name: "moreInfoEntity",
+              label: "Open more info for",
+              helper: "Leave empty to open this device",
+              selector: { entity: {} },
+            },
+          ]
+        : []),
       { name: "hold_action", label: "Hold action", selector: { ui_action: { default_action: "none" } } },
       {
         name: "double_tap_action",
@@ -1664,10 +1726,27 @@ export function itemBehaviourForm(it: FloorItem): FormSpec {
     data: {
       hideWhenInactive: it.hideWhenInactive ?? false,
       tap_action: it.tap_action,
+      ...(tapOpensMoreInfo
+        ? { moreInfoEntity: it.tap_action?.entity ?? "" }
+        : {}),
       hold_action: it.hold_action,
       double_tap_action: it.double_tap_action,
     },
-    toPatch: identity,
+    toPatch: (p) => {
+      if (!("moreInfoEntity" in p)) return p;
+      const { moreInfoEntity, ...rest } = p;
+      if (!tapOpensMoreInfo) return rest;
+      const entity = typeof moreInfoEntity === "string" && moreInfoEntity ? moreInfoEntity : undefined;
+      const next: Record<string, unknown> = { ...(it.tap_action ?? {}), action: "more-info" };
+      if (entity) next.entity = entity;
+      else delete next.entity;
+      // A sensor's tap already opens its own more-info. Writing that down with
+      // no other entity would only lengthen the YAML.
+      const bare =
+        next.action === defaultItemAction(it.entity).action &&
+        Object.keys(next).every((k) => k === "action" || next[k] == null);
+      return { ...rest, tap_action: bare ? undefined : next };
+    },
   };
 }
 
@@ -2547,6 +2626,16 @@ export function projectReliefForm(c: FloorplanCardConfig): FormSpec {
         selector: { boolean: {} },
       }
     );
+    // The moon (issue #201) only follows a sun that sets: a pinned one keeps
+    // its light on all night, so there is no night for the moon to light.
+    if (typeof c.sunBearing !== "number") {
+      fields.push({
+        name: "moonlight",
+        label: "Moonlight",
+        helper: "After dark the moon lets in its own cooler light, brighter the fuller it is",
+        selector: { boolean: {} },
+      });
+    }
     // Only worth asking once the light is pinned; following the sun means the
     // angle is not ours to choose.
     if (typeof c.sunBearing === "number") {
@@ -2560,15 +2649,28 @@ export function projectReliefForm(c: FloorplanCardConfig): FormSpec {
       });
     }
   }
+  // Clouds (issue #201): asked only while some layer reads the real sky — the
+  // same rule cloudCoverEntityOf applies, so the row is never a dead control.
+  if (c.ambientDaylight || (c.sunlight && typeof c.sunBearing !== "number")) {
+    fields.push({
+      name: "cloudCoverEntity",
+      label: "Clouds",
+      helper:
+        "A weather entity, or a cloud cover sensor in %. Cloud thins the sunlight, and the sky light a little",
+      selector: { entity: { filter: [{ domain: ["weather", "sensor"] }] } },
+    });
+  }
   return {
     fields,
     data: {
+      cloudCoverEntity: c.cloudCoverEntity ?? "",
       ambientDaylight: c.ambientDaylight ?? false,
       sunlight: c.sunlight ?? false,
       sunShade: c.sunShade ?? true,
       north: c.north ?? 0,
       sunReach: c.sunReach ?? SUN_REACH,
       sunFollows: typeof c.sunBearing !== "number",
+      moonlight: c.moonlight ?? false,
       sunBearing: c.sunBearing ?? DEFAULT_SUN_BEARING,
     },
     toPatch: (p) => {
@@ -2577,6 +2679,14 @@ export function projectReliefForm(c: FloorplanCardConfig): FormSpec {
       // therefore stays out of YAML even when direct sunlight is also toggled.
       if ("ambientDaylight" in out && !out.ambientDaylight)
         out = { ...out, ambientDaylight: undefined };
+      // The clouds belong to the sky light and to a sun that follows the real
+      // one, so they go only once neither is left to read them — for the
+      // reason the list below gives. Judged on what the patch leaves, since
+      // pinning the sun hides the Clouds row as surely as switching it off.
+      const sunOn = "sunlight" in out ? !!out.sunlight : !!c.sunlight;
+      const skyOn = "ambientDaylight" in out ? !!out.ambientDaylight : !!c.ambientDaylight;
+      const follows = "sunFollows" in out ? !!out.sunFollows : typeof c.sunBearing !== "number";
+      if (!skyOn && !(sunOn && follows)) out.cloudCoverEntity = undefined;
       // Nothing left to aim or to paint, so all of the direct-sun state goes —
       // every one of these keys is read only while the light is on, and left behind they
       // would sit in the YAML meaning nothing and come back stale on
@@ -2596,12 +2706,16 @@ export function projectReliefForm(c: FloorplanCardConfig): FormSpec {
           sunShade: undefined,
           sunlightColor: undefined,
           sunShadeColor: undefined,
+          moonlight: undefined,
         };
       }
       // "Follow the sun" is the *absence* of a stated bearing (issue #113's
       // rule: the live reading wins only when nothing was decided).
       if ("sunFollows" in out) {
         out.sunBearing = out.sunFollows ? undefined : (c.sunBearing ?? DEFAULT_SUN_BEARING);
+        // A pinned sun never sets, so there is no night left for the moon:
+        // its switch goes with its row rather than waiting stale in the YAML.
+        if (!out.sunFollows) out.moonlight = undefined;
         delete out.sunFollows;
       }
       // The defaults stay out of the YAML — shading is on unless declined.
@@ -2609,6 +2723,7 @@ export function projectReliefForm(c: FloorplanCardConfig): FormSpec {
       // The default stays out of the YAML, like every other default here.
       if ("sunReach" in out && out.sunReach === SUN_REACH) out.sunReach = undefined;
       if ("sunShade" in out && out.sunShade) out.sunShade = undefined;
+      if ("moonlight" in out && !out.moonlight) out.moonlight = undefined;
       return out;
     },
   };

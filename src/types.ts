@@ -133,8 +133,19 @@ export type WallKind = "wall" | "railing";
  * blind over it with an entity of its own, colours, icons, gestures, actions,
  * locking, selection and drag — is exactly what an opening already is. Making
  * it a top-level array would have meant a second copy of all of it.
+ *
+ * `passage` is the gap with nothing in it (issue #309): an open doorway, an
+ * archway, the frame an internal door was taken out of. It is a wall opening
+ * like a door — it snaps to a wall, cuts the band, lets light and lamps
+ * through, and is a way into a dead space — but it has no leaf, no arc and no
+ * glass, and it is always open. Drawn as a door with the symbol hidden, it
+ * would still carry a hinge, a swing and a sensor that could shut it; drawn
+ * as two walls, it could not be measured and placed as the one width it is.
+ * A type for the same reason the skylight is one: what it is drawn as and
+ * what the light does with it differ, and there is no sash whose travel a
+ * {@link Opening.motion} could describe.
  */
-export type OpeningType = "door" | "window" | "skylight";
+export type OpeningType = "door" | "window" | "skylight" | "passage";
 
 /**
  * Whether this opening is a hole in the **ceiling** rather than in a wall.
@@ -156,6 +167,19 @@ export function openingIsSkylight(o: Pick<Opening, "type">): boolean {
 }
 
 /**
+ * Whether this opening is a plain **gap** in its wall — no leaf, no glass,
+ * never shut (issue #309). See {@link OpeningType}.
+ *
+ * The mirror image of `motion: "fixed"`: a fixed pane is never clear whatever
+ * its sensor says, and a passage is always clear whatever its sensor says. An
+ * `entity` on one still badges and takes gestures, as it does on a fixed pane;
+ * it just has nothing to move.
+ */
+export function openingIsPassage(o: Pick<Opening, "type">): boolean {
+  return o.type === "passage";
+}
+
+/**
  * How a sliding opening's panels are arranged. Named as a type rather than
  * inlined on {@link Opening.sliderStyle} so the render and the editor agree on
  * the set — three of these carry a second moving panel and the list had started
@@ -164,16 +188,17 @@ export function openingIsSkylight(o: Pick<Opening, "type">): boolean {
 export type SliderStyle = "single" | "bypass" | "biparting" | "biparting-bypass" | "converging";
 
 /**
- * A door, a window, or a skylight. Positioned by its center point and rotation
- * so it can be dropped onto (and aligned with) a wall, but it is stored
- * independently. A skylight is in the ceiling and so snaps to no wall — see
- * {@link OpeningType}.
+ * A door, a window, a skylight or a passage. Positioned by its center point
+ * and rotation so it can be dropped onto (and aligned with) a wall, but it is
+ * stored independently. A skylight is in the ceiling and so snaps to no wall —
+ * see {@link OpeningType}.
  */
 export interface Opening {
   id: string;
   /**
    * The kind of opening: a `door` (single leaf), a `window` (two leaves /
-   * glass), or a `skylight` (a hole in the ceiling). See {@link OpeningType}.
+   * glass), a `skylight` (a hole in the ceiling), or a `passage` (a gap in the
+   * wall with nothing in it). See {@link OpeningType}.
    */
   type: OpeningType;
   /**
@@ -1981,6 +2006,36 @@ export interface FloorplanCardConfig extends LovelaceCardConfig {
    * {@link skylightDropFraction} — for the same reason `sunReach` is.
    */
   skylightDrop?: number;
+  /**
+   * Where to read the sky's cloud cover (issue #201): a `weather` entity,
+   * whose `cloud_coverage` attribute is used, or any entity whose state is a
+   * percentage. Met.no — the weather integration a new Home Assistant sets
+   * up for you — reports it.
+   *
+   * Clouds take the sun's patches down to {@link CLOUD_DIRECT_MIN} of
+   * themselves at full cover and leave the shade where it was, and take the
+   * diffuse {@link ambientDaylight} only to {@link CLOUD_DIFFUSE_MIN}: an
+   * overcast sky hides the sun but is itself about as bright as a clear one.
+   * Unset or unreadable, nothing is dimmed.
+   *
+   * Read only while something reads the real sky — a pinned
+   * {@link sunBearing} states a picture, so it ignores the weather just as it
+   * ignores the sun's height.
+   */
+  cloudCoverEntity?: string;
+  /**
+   * Let the moon in too, once the sun is down (issue #201). A cool light
+   * through the same openings by the same rules as {@link sunlight}, from
+   * wherever the moon actually is, and as bright as it is full: a thin
+   * crescent lets in a trace, a new moon nothing.
+   *
+   * An add-on to sunlight that follows the real sun. It needs `sunlight` on
+   * and no {@link sunBearing}: a pinned sun never sets, so there is no night
+   * for the moon to light. Home Assistant has no entity for the moon's
+   * position, so it is worked out from the instance's latitude and longitude
+   * — see `moon.ts`.
+   */
+  moonlight?: boolean;
   /**
    * What a device does when you press it (issue #134). Tapping used to change
    * nothing on screen until the entity itself came back — which on a cover or

@@ -117,6 +117,14 @@ import {
   normalizeOverlayMinWidth,
   overlayLength,
   renderSunlight,
+  cloudCover,
+  cloudCoverEntityOf,
+  sunThroughCloud,
+  moonlightOf,
+  moonlightOn,
+  MOON_LIGHT_COLOR,
+  MOON_TICK_MS,
+  type SunlightOptions,
   sunLightDirection,
   sunlightStrengthOf,
   sunReachScale,
@@ -142,6 +150,7 @@ import {
   zoomedOverlayScale,
   IDENTITY_ZOOM,
   wallThickness,
+  RAILING_WEIGHT,
   type PlanRotation,
   type OpeningStyle,
 } from "./render";
@@ -281,6 +290,7 @@ export class FloorplanCard extends LitElement {
 
   public connectedCallback(): void {
     super.connectedCallback();
+    this._syncMoonClock();
     // Subscribed unconditionally rather than only when an override is set:
     // the config can change under a live card, and a query that is listened
     // to but never read costs nothing.
@@ -321,6 +331,7 @@ export class FloorplanCard extends LitElement {
     };
     this._watchedEntities = collectWatchedEntities(this._config);
     this._nameEntities = collectNamedEntities(this._config);
+    this._syncMoonClock();
     this._syncHistoryServiceContext();
     this._replayController.clearConfigColorCache();
     // HA calls setConfig on every keystroke in the config box. Clearing the
@@ -565,7 +576,31 @@ export class FloorplanCard extends LitElement {
     // replace this one — taking the replay loop's cleanup with it.
     this._unsubscribeOrientation?.();
     this._unsubscribeOrientation = undefined;
+    // Not connected any more, so this stops it.
+    this._syncMoonClock();
     super.disconnectedCallback();
+  }
+
+  /**
+   * The moon's clock (issue #201). Nothing in Home Assistant changes when the
+   * moon moves — it has no entity — so while moonlight is on the card redraws
+   * itself every {@link MOON_TICK_MS}. `sun.sun` does step through the night,
+   * but only every twenty minutes, which leaves the moon's light jumping five
+   * degrees at a time.
+   *
+   * Only while connected, and only while moonlight is on: a plan without it
+   * keeps drawing on state changes alone, as it always has.
+   */
+  private _moonClock?: ReturnType<typeof setInterval>;
+
+  private _syncMoonClock(): void {
+    const wanted = this.isConnected && !!this._config && moonlightOn(this._config);
+    if (wanted && this._moonClock === undefined) {
+      this._moonClock = setInterval(() => this.requestUpdate(), MOON_TICK_MS);
+    } else if (!wanted && this._moonClock !== undefined) {
+      clearInterval(this._moonClock);
+      this._moonClock = undefined;
+    }
   }
 
   private _handleItemAction(
@@ -766,7 +801,8 @@ export class FloorplanCard extends LitElement {
     const walls = standingWalls.map((w) => {
       const a = map(w.x1, w.y1);
       const b = map(w.x2, w.y2);
-      return { id: w.id, x1: a.x, y1: a.y, x2: b.x, y2: b.y, thickness: wallThickness(w.thickness) };
+      return { id: w.id, kind: w.kind, x1: a.x, y1: a.y, x2: b.x, y2: b.y,
+        thickness: wallThickness(w.thickness) * (isRailing(w) ? RAILING_WEIGHT : 1) };
     });
     const openings = active.openings.map((o) => {
       const p = map(o.x, o.y);
@@ -980,6 +1016,69 @@ export class FloorplanCard extends LitElement {
     }
     if (!this.hass) return;
     executeAction(this, this.hass, { entity: press.entity }, press.config);
+  }
+
+  /** The visible control owns gestures; the furniture drawing always lets room taps through. */
+  private _renderFurnitureAction(
+    f: Furniture,
+    c: FloorplanCardConfig,
+    rot: PlanRotation,
+    floors: readonly Floor[],
+    activeId: string,
+  ): TemplateResult | typeof nothing {
+    const to = furnitureFloorTarget(f, floors, activeId);
+    const runs = (gesture: "tap" | "hold" | "double_tap"): boolean => {
+      const press = furnitureActionForGesture(f, gesture);
+      return !!press && gestureDoesSomething({ entity: press.entity }, press.config);
+    };
+    const hasTap = runs("tap");
+    const hasHold = runs("hold");
+    const hasDoubleClick = runs("double_tap");
+    // A configured tap, even `none` or an unusable action, suppresses navigation.
+    const goesToFloor = !!to && !furnitureActionForGesture(f, "tap");
+    if (!goesToFloor && !hasTap && !hasHold && !hasDoubleClick) return nothing;
+
+    const tappable = hasTap || goesToFloor;
+    const floorName = floors.find((floor) => floor.id === to)?.name;
+    const name = goesToFloor
+      ? (floorName ? `Go to ${floorName}` : "Go to the next floor")
+      : furnitureAccessibleName(f, this.hass, symbolCatalog(c.symbols));
+    const gestures = [tappable && "Tap", hasHold && "Hold", hasDoubleClick && "Double-tap"]
+      .filter(Boolean).join(", ");
+    const icon = goesToFloor
+      ? (floors.findIndex((floor) => floor.id === to) > floors.findIndex((floor) => floor.id === activeId)
+        ? "mdi:stairs-up" : "mdi:stairs-down")
+      : hasTap ? "mdi:gesture-tap" : hasHold ? "mdi:gesture-tap-hold" : "mdi:gesture-double-tap";
+    // Upright HTML, anchored to the same elevated centre as the SVG glyph.
+    // Floor-level coordinates would leave the control below the table in 3D.
+    const frame = this._frame(c, rot);
+    const at = rotatePlanPoint(f.x, f.y, c.width, c.height, rot);
+    const p = projectPlanPoint(at.x, at.y, frame, frame.wallHeight * FURNITURE_HEIGHT_FRACTION);
+    const d = projectedCanvasSize(frame);
+    return html`<div
+        class="fp-furniture-link"
+        data-id=${cssIdent(f.id) ?? nothing}
+        style="left:${(p.x / d.w) * 100}%;top:${(p.y / d.h) * 100}%;"
+        title=${`${name} · ${gestures}`}
+        role=${tappable ? "button" : "group"}
+        tabindex=${tappable ? "0" : nothing}
+        aria-label=${name}
+        aria-description=${`${gestures} actions`}
+        @action=${(ev: CustomEvent<{ action: "tap" | "hold" | "double_tap" }>) =>
+          this._onFurnitureAction(ev, f, floors, to)}
+        @keydown=${(ev: KeyboardEvent) => {
+          if (ev.key !== "Enter" && ev.key !== " ") return;
+          ev.preventDefault();
+          // Keyboard activation is always a tap, never the pointer's hold or
+          // double-tap recognizer. Register before actionHandler's listener.
+          ev.stopImmediatePropagation();
+          if (tappable && !ev.repeat) {
+            this._onFurnitureAction(new CustomEvent("action", { detail: { action: "tap" } }), f, floors, to);
+          }
+        }}
+        .actionHandler=${actionHandler({ hasHold, hasDoubleClick })}>
+      <ha-icon icon=${icon} aria-hidden="true"></ha-icon>
+    </div>`;
   }
 
   private _renderBadge(item: FloorItem, scale: OverlayScale, renderHass: RenderHass | undefined): TemplateResult {
@@ -1306,98 +1405,11 @@ export class FloorplanCard extends LitElement {
     const dimPad = WALL_THICKNESS + (iso ? frame.wallHeight : 0);
     // One furniture glyph, flat. Drawn on the floor on the flat plan and on
     // top of its block under the isometric view — the same drawing either way.
-    const drawFurniture = (f: Furniture): SVGTemplateResult => {
-      const drawn = renderFurniture(
-        f,
-        furnitureColor(f, f.entity ? renderHass?.states[f.entity]?.state : undefined),
-        symbolCatalog(c.symbols)
-      );
-      // Stairs that go somewhere (issue #121). Only when there is a
-      // floor that way: at the top of the building an "up" staircase
-      // is still a staircase, but it takes no clicks rather than
-      // offering a control that does nothing.
-      const to = furnitureFloorTarget(f, floors, active.id);
-      // …and anything else the piece was told to do (issue #284). Hold
-      // and double-tap are asked for separately because the handler
-      // needs to know whether to spend their timers: a staircase with
-      // only a floor change must still answer a tap immediately.
-      //
-      // Whether the gesture could actually *run*, which is a stricter
-      // question than whether one is configured. `hasAction` only says
-      // "present and not `none`", and the guards `executeAction`
-      // applies go further: a `more-info` with no entity to show, a
-      // `navigate` with no path, a `call-service` with no service all
-      // pass it and then do nothing. Asking the weaker question hands
-      // a tab stop and a button role to a piece that answers to
-      // nothing, and spends the hold and double-tap timers on gestures
-      // that cannot fire — so every tap waits out a hold that was
-      // never going to happen.
-      const runs = (g: "tap" | "hold" | "double_tap"): boolean => {
-        const p = furnitureActionForGesture(f, g);
-        return !!p && gestureDoesSomething({ entity: p.entity }, p.config);
-      };
-      const hasHold = runs("hold");
-      const hasDoubleClick = runs("double_tap");
-      const hasTap = runs("tap");
-      // Configured at all, `none` included — a separate question from
-      // whether it does anything. Writing `tap_action: none` on a
-      // staircase is how a plan says "draw the stairs, but do not let
-      // them navigate", so a configured tap suppresses the floor
-      // fallback whether or not it is a no-op. `_onFurnitureAction`
-      // decides the same way, by asking whether a tap was configured
-      // rather than whether it does anything.
-      const tapConfigured = !!furnitureActionForGesture(f, "tap");
-      const goesToFloor = !!to && !tapConfigured;
-      // An inert piece stays inert: no role, no tab stop, no listeners.
-      // A gray diagram that announces itself as a button and then does
-      // nothing is worse than one that says nothing at all.
-      if (!goesToFloor && !hasTap && !hasHold && !hasDoubleClick) return drawn;
-      // The button role and the tab stop are earned by the *tap*, not by
-      // any gesture at all. `actionHandler` turns Enter and Space into
-      // a tap and nothing else, so a piece whose only action sits on
-      // hold or double-tap would take focus, announce itself as a
-      // button, and then do nothing when a keyboard user pressed it —
-      // a promise this card cannot keep.
-      //
-      // Such a piece keeps its listeners, so the hold still works under
-      // a pointer; it just stops advertising a control that cannot be
-      // operated. Hold and double-tap being pointer-only is not new
-      // here — it is true of every item and room on the plan, because
-      // the keyboard has one activation and they are the second and
-      // third gestures on it.
-      const tappable = hasTap || goesToFloor;
-      const name = floors.find((x) => x.id === to)?.name;
-      // Names the gesture that actually runs. A configured tap replaces
-      // the floor change, so promising "Go to Upstairs" would be a lie
-      // on exactly the plans this feature was asked for.
-      const label = goesToFloor ? (name ? `Go to ${name}` : "Go to the next floor") : undefined;
-      // With no floor label there is nothing naming this button, so
-      // say what it is. Only in that case: an `aria-label` would
-      // override the <title> that is already doing the job.
-      //
-      // From the live hass, not `renderHass`, which is the one place
-      // in this template that wants it. `renderHass` is filtered to
-      // the entities the *drawing* watches, and an action's target is
-      // deliberately not one of them — a tap opening a light does not
-      // change how the room looks. Reading the name there would find
-      // nothing and fall back to the raw entity id. It is also what
-      // the gesture itself does: `_onFurnitureAction` hands the live
-      // hass to `executeAction`, so the button is named after the
-      // state it will actually act on, replay or no replay.
-      const spoken = tappable && !label ? furnitureAccessibleName(f, this.hass, symbolCatalog(c.symbols)) : nothing;
-      return svg`<g class="fp-furniture-link"
-            role=${tappable ? "button" : nothing}
-            tabindex=${tappable ? "0" : nothing}
-            aria-label=${spoken}
-            @action=${(ev: CustomEvent<{ action: "tap" | "hold" | "double_tap" }>) =>
-              this._onFurnitureAction(ev, f, floors, to)}
-            .actionHandler=${actionHandler({ hasHold, hasDoubleClick })}>
-          <!-- An SVG tooltip is a <title> child, not a title=
-               attribute: the attribute does nothing here. -->
-          ${label ? svg`<title>${label}</title>` : nothing}
-          ${drawn}
-        </g>`;
-    };
+    const drawFurniture = (f: Furniture): SVGTemplateResult => renderFurniture(
+      f,
+      furnitureColor(f, f.entity ? renderHass?.states[f.entity]?.state : undefined),
+      symbolCatalog(c.symbols)
+    );
     // The block's colour: what the glyph is drawn in, through the same allowlist.
     const furnitureTone = (f: Furniture): string =>
       furnitureColor(f, f.entity ? renderHass?.states[f.entity]?.state : undefined) ??
@@ -1462,6 +1474,64 @@ export class FloorplanCard extends LitElement {
           )
         )
       : blockingWallSegments;
+    // What each opening lets through, for every light that comes in by them —
+    // the sun, and after dark the moon.
+    const openingLight: Pick<SunlightOptions, "openAmount" | "shutterOpen" | "drop"> = {
+      // The gap each style actually clears, both leaves included — the same
+      // reading the lamps get above, and for the same reason (#145): `entity`
+      // alone leaves a door whose *second* panel is open reading as shut, and
+      // a converging pair reading as twice as clear as it draws. Glazing and
+      // shutters are applied on top of this, inside openingSunFraction.
+      openAmount: (o) =>
+        openingClearFraction(
+          o,
+          this._openingAmount(o, renderHass),
+          this._openingSecond(o, renderHass)?.amount
+        ),
+      // A shutter that is all the way down stops the light, as one does.
+      // Undefined where none is bound, so an opening without a shutter is
+      // judged on itself alone.
+      shutterOpen: (o) =>
+        o.shutterEntity
+          ? shutterAmount(renderHass?.states[o.shutterEntity], o.shutterInvert)
+          : undefined,
+      // How far a skylight's patch slides from the roof light before it
+      // lands. Handed on raw: it is a fraction of the reach, which already
+      // carries the light's height, so scaling it here would apply 1/tan
+      // twice and pin every patch under its own skylight at noon. Bounded at
+      // the sink, in skylightDropFraction.
+      drop: c.skylightDrop,
+    };
+    // The moon (issue #201), where it is at the moment being drawn: the
+    // replayed one during replay, so a replayed night shows that night's moon.
+    // Home Assistant has no entity for its position, so it comes from the
+    // instance's own latitude and longitude. The replay clock counts seconds;
+    // the moon counts milliseconds, as Date.now() does.
+    const moon = moonlightOn(c)
+      ? moonlightOf(
+          c,
+          replayState.enabled ? replayState.currentTime * 1000 : Date.now(),
+          this.hass?.config,
+          renderHass?.states["sun.sun"]?.attributes?.elevation,
+          cloudCover(cloudCoverEntityOf(c), renderHass)
+        )
+      : undefined;
+    // Drawn twice: once in colour under the walls, where the sun's light
+    // goes, and once in black into the sun-dim mask below, where it holds
+    // the night back the way a lamp's pool does.
+    const moonLayer = (id: string, light: string) =>
+      moon
+        ? renderSunlight(blockingWallSegments, active.openings, c.width, c.height, id, {
+            ...openingLight,
+            dir: moon.dir,
+            strength: moon.strength,
+            // Shortened as the moon climbs, exactly as the sun's is.
+            reach: cssNumber(c.sunReach, SUN_REACH) * sunReachScale(moon.altitude),
+            light,
+            // The night is the shade; a second one would darken it twice.
+            shade: null,
+          })
+        : nothing;
     // Lit rooms hold back the night (issue #113): without this the flat dim
     // multiplies the lit-vs-unlit contrast too, and a lamp ends up *less*
     // visible after dark than at noon.
@@ -1473,7 +1543,8 @@ export class FloorplanCard extends LitElement {
           c.width,
           c.height,
           sunDimMaskId,
-          lightWalls
+          lightWalls,
+          moonLayer(`${this._wallMaskId}-moondim`, "#000")
         )
       : nothing;
     // Zoom-to-room (tap an area). Both the SVG and the HTML overlay live
@@ -1705,6 +1776,10 @@ export class FloorplanCard extends LitElement {
                         c,
                         renderHass?.states["sun.sun"]?.attributes?.elevation
                       ),
+                      // The clouds (issue #201) thin what the sun lights and
+                      // leave its shade, and a pinned plan ignores them the
+                      // same way — see sunThroughCloud.
+                      direct: sunThroughCloud(c, cloudCover(cloudCoverEntityOf(c), renderHass)),
                       // How far a patch carries, shortened as the sun climbs
                       // (issue #185): a midday sun drops its light almost
                       // straight down and lays a short patch, an evening one
@@ -1720,39 +1795,18 @@ export class FloorplanCard extends LitElement {
                         (sunIsPinned(c)
                           ? 1
                           : sunReachScale(renderHass?.states["sun.sun"]?.attributes?.elevation)),
-                      // The gap each style actually clears, both leaves
-                      // included — the same reading the lamps get above, and
-                      // for the same reason (#145): `entity` alone leaves a
-                      // door whose *second* panel is open reading as shut,
-                      // and a converging pair reading as twice as clear as it
-                      // draws. Glazing and shutters are applied on top of
-                      // this, inside openingSunFraction.
-                      openAmount: (o) =>
-                        openingClearFraction(
-                          o,
-                          this._openingAmount(o, renderHass),
-                          this._openingSecond(o, renderHass)?.amount
-                        ),
-                      // A shutter that is all the way down stops the light, as
-                      // one does. Undefined where none is bound, so an opening
-                      // without a shutter is judged on itself alone.
-                      shutterOpen: (o) =>
-                        o.shutterEntity
-                          ? shutterAmount(renderHass?.states[o.shutterEntity], o.shutterInvert)
-                          : undefined,
-                      // How far a skylight's patch slides from the roof light
-                      // before it lands. Handed on raw: it is a fraction of
-                      // the reach above, which already carries the sun's
-                      // height, so scaling it here would apply 1/tan twice
-                      // and pin every patch under its own skylight at noon.
-                      // Bounded at the sink, in skylightDropFraction.
-                      drop: c.skylightDrop,
+                      ...openingLight,
                       light: c.sunlightColor ?? SUN_LIGHT_COLOR,
                       shade: c.sunShade === false ? null : (c.sunShadeColor ?? SUN_SHADE_COLOR),
                     }
                   )
                 : nothing
             }
+            <!-- Moonlight (issue #201): the same light through the same
+                 openings, cool rather than warm, once the sun has set. -->
+            ${moon
+              ? svg`<g class="fp-moonlight">${moonLayer(`${this._wallMaskId}-moon`, MOON_LIGHT_COLOR)}</g>`
+              : nothing}
             ${renderWallMask(active.openings, c.width, c.height, this._wallMaskId)}
             ${(standing ? flatWallSegments : roomWallSegments).map(
                 (w) => svg`
@@ -1859,7 +1913,7 @@ export class FloorplanCard extends LitElement {
           )}
           <div
             class="items"
-            style="--fp-inv-zoom:${zoomedOverlayScale(zoom.scale, c.zoomedOverlayScale)};"
+            style="--fp-inv-zoom:${zoomedOverlayScale(zoom.scale, c.zoomedOverlayScale)};--fp-furniture-inv-zoom:${1 / zoom.scale};"
           >
             ${active.areas?.map((a) => this._renderAreaLabel(a, c, rot, scale))}
             ${active.texts.map((t) => this._renderText(t, c, rot, scale))}
@@ -1874,6 +1928,11 @@ export class FloorplanCard extends LitElement {
               active.openings.filter((o) => hasOpeningMark(o)),
               (o, i) => `${o.id || i}-opening`,
               (o) => this._renderOpeningMark(o, c, rot, scale, renderHass)
+            )}
+            ${repeat(
+              active.furniture,
+              (f, i) => f.id || i,
+              (f) => this._renderFurnitureAction(f, c, rot, floors, active.id)
             )}
             ${repeat(
               // No entity filter: devices that exist physically but have no HA
@@ -2292,15 +2351,43 @@ export class FloorplanCard extends LitElement {
     .area-tap-target {
       cursor: pointer;
     }
-    /* A staircase that changes floor (issue #121). The pointer is the whole
-       affordance — the symbol already draws an arrow saying which way it
-       goes — and it only exists on a piece that has somewhere to lead. */
+    /* Furniture surfaces always pass input to the room, including pieces with
+       actions. Card-only: the editor must still select and move the drawing. */
+    .fp-furniture { pointer-events: none; }
     .fp-furniture-link {
+      position: absolute;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      /* The visible circle is the whole hit target. It stays finger-sized,
+         independent of canvas scale, projection and room zoom. */
+      box-sizing: border-box;
+      width: ${MIN_TOUCH_TARGET}px;
+      height: ${MIN_TOUCH_TARGET}px;
+      border-radius: 50%;
+      border: 1px solid var(--fp-skin-text, var(--primary-text-color, #212121));
+      background: var(--fp-skin-paper, var(--card-background-color, #fff));
+      color: var(--fp-skin-text, var(--primary-text-color, #212121));
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+      transform: translate(-50%, -50%) scale(var(--fp-furniture-inv-zoom, 1));
+      transition: transform 0.4s ease;
+      pointer-events: auto;
       cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+      -webkit-touch-callout: none;
+      user-select: none;
+    }
+    .fp-furniture-link ha-icon {
+      display: flex;
+      --mdc-icon-size: 20px;
+      pointer-events: none;
     }
     .fp-furniture-link:focus-visible {
-      outline: 2px solid var(--fp-skin-accent, var(--primary-color, #03a9f4));
+      outline: 2px solid var(--fp-skin-text, var(--primary-text-color, #212121));
       outline-offset: 2px;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .fp-furniture-link { transition: none; }
     }
     svg {
       position: absolute;
@@ -2366,12 +2453,12 @@ export class FloorplanCard extends LitElement {
        shade laid over a side is what makes a box read as a box; a furniture
        block keeps the paper on top so its glyph still reads. Wall faces pass
        taps through; opening panels and furniture keep their own actions. */
-    .fp-iso-wall polygon, .fp-iso-sill polygon { stroke: none; }
+    .fp-iso-wall polygon, .fp-iso-railing polygon, .fp-iso-sill polygon { stroke: none; }
     /* Everything standing in the wall plane fades together. A closed door leaf
        left at full opacity read as a patch of wall that had refused to turn
        transparent, which is what it looks like from the front (issue #261
        review). Glazed panels keep their own glass alpha instead. */
-    .fp-iso-wall, .fp-iso-sill, .fp-iso-panel:not(.fp-iso-glazed) {
+    .fp-iso-wall, .fp-iso-railing, .fp-iso-sill, .fp-iso-panel:not(.fp-iso-glazed) {
       opacity: var(--fp-wall-opacity, 1);
     }
     .fp-iso-panel {

@@ -449,6 +449,9 @@ describe("openingForm — a hinged shutter's second panel (issue #159)", () => {
 
 describe("itemForm", () => {
   const item = { id: "i", entity: "light.a", kind: "light", x: 0, y: 0 } as FloorItem;
+  // What a real light publishes, including while it is off. The effects group
+  // is offered from this, not from the entity's domain.
+  const bulb = { state: "off", attributes: { supported_color_modes: ["onoff"] } };
 
   // The device panel is seven groups now rather than one form, but almost
   // every question below is about the panel as a whole — "is this control
@@ -458,7 +461,8 @@ describe("itemForm", () => {
   const groups = (
     it: FloorItem,
     deviceClass?: string,
-    badgeSource?: Parameters<typeof itemBadgeForm>[1]
+    badgeSource?: Parameters<typeof itemBadgeForm>[1],
+    entity?: Parameters<typeof itemEffectsForm>[2]
   ) =>
     [
       itemIdentityForm(it),
@@ -466,15 +470,16 @@ describe("itemForm", () => {
       itemShowStateForm(it),
       itemHasLabel(it) ? itemLabelForm(it) : undefined,
       itemBadgeForm(it, badgeSource),
-      itemEffectsForm(it, deviceClass),
+      itemEffectsForm(it, deviceClass, entity),
       itemBehaviourForm(it),
     ].filter((g): g is NonNullable<typeof g> => !!g);
   const itemForm = (
     it: FloorItem,
     deviceClass?: string,
-    badgeSource?: Parameters<typeof itemBadgeForm>[1]
+    badgeSource?: Parameters<typeof itemBadgeForm>[1],
+    entity?: Parameters<typeof itemEffectsForm>[2]
   ) => {
-    const gs = groups(it, deviceClass, badgeSource);
+    const gs = groups(it, deviceClass, badgeSource, entity);
     return {
       fields: gs.flatMap((g) => g.fields),
       data: Object.assign({}, ...gs.map((g) => g.data)) as Record<string, unknown>,
@@ -501,7 +506,7 @@ describe("itemForm", () => {
       //    fields, so they do not appear here — the editor slots them into
       //    their groups.
       // 6. Effects is absent: a plain sensor neither rings nor casts light.
-      ["hideWhenInactive", "tap_action", "hold_action", "double_tap_action"], // 7. Behaviour
+      ["hideWhenInactive", "tap_action", "moreInfoEntity", "hold_action", "double_tap_action"], // 7. Behaviour
     ]);
   });
 
@@ -523,17 +528,44 @@ describe("itemForm", () => {
     ).toBe(true);
   });
 
-  it("offers Cast light on lights only, with its controls behind the toggle (#6)", () => {
-    const names = (it: FloorItem) => itemForm(it).fields.map((x) => x.name);
-    expect(names(item)).toContain("glow");
+  it("offers Cast light when the entity can be on, with its controls behind the toggle (#6)", () => {
+    const names = (it: FloorItem, entity?: Parameters<typeof itemEffectsForm>[2]) =>
+      itemForm(it, undefined, undefined, entity).fields.map((x) => x.name);
+    const offLight = { state: "off", attributes: { supported_color_modes: ["onoff"] } };
+    expect(names(item, offLight)).toContain("glow");
     // Radius/colour would be noise on a device that isn't casting yet.
-    expect(names(item)).not.toContain("glowRadius");
+    expect(names(item, offLight)).not.toContain("glowRadius");
+    // Colour modes stay published while the bulb is unavailable.
+    expect(
+      names(item, { state: "unavailable", attributes: { supported_color_modes: ["brightness"] } })
+    ).toContain("glow");
     const lit = { ...item, glow: true } as FloorItem;
-    expect(names(lit)).toContain("glowRadius");
-    expect(names(lit)).toContain("glowColor");
-    expect(itemForm(lit).data.glowRadius).toBe(DEFAULT_GLOW_RADIUS);
-    // A sensor has no colour to cast, so it is never offered.
-    expect(names({ ...item, kind: "sensor", entity: "sensor.temp" } as FloorItem)).not.toContain("glow");
+    expect(names(lit, offLight)).toContain("glowRadius");
+    expect(names(lit, offLight)).toContain("glowColor");
+    expect(itemForm(lit, undefined, undefined, offLight).data.glowRadius).toBe(DEFAULT_GLOW_RADIUS);
+    // A switch publishes no colour modes. On and off are the signal the pool reads.
+    const sw = { ...item, kind: "switch", entity: "switch.lamp" } as FloorItem;
+    const plug = { state: "off", attributes: {} };
+    expect(names(sw, plug)).toContain("glow");
+    expect(names(sw, plug)).not.toContain("glowRadius");
+    expect(names(sw, plug)).not.toContain("ripple");
+    expect(names(sw, { state: "on", attributes: { device_class: "outlet" } })).toContain("glow");
+    const litSwitch = { ...sw, glow: true } as FloorItem;
+    expect(names(litSwitch, plug)).toContain("glowRadius");
+    expect(names(litSwitch, plug)).toContain("glowColor");
+    expect(itemForm(litSwitch, undefined, undefined, plug).data.glowRadius).toBe(DEFAULT_GLOW_RADIUS);
+    // A sensor's reading is not an on-state, so it is never offered.
+    const sensor = { ...item, kind: "sensor", entity: "sensor.temp" } as FloorItem;
+    const reading = { state: "21.5", attributes: { unit_of_measurement: "°C", device_class: "temperature" } };
+    expect(names(sensor, reading)).not.toContain("glow");
+    expect(
+      itemEffectsForm({ ...item, kind: "sensor", entity: "sensor.t" } as FloorItem, undefined, {
+        state: "on",
+        attributes: { device_class: "motion" },
+      })
+    ).toBeUndefined();
+    // A pool already turned on stays editable after the entity drops out.
+    expect(names(litSwitch)).toContain("glow");
   });
 
   it("offers Ripple on detecting devices only, sized behind the toggle (#127, #202)", () => {
@@ -556,7 +588,7 @@ describe("itemForm", () => {
     const ringed = { ...motion, display: "iconRipple" } as FloorItem;
     expect(names(ringed, "motion")).toContain("rippleSize");
     // A ring set on something else still reads back, so toPatch keeps it.
-    expect(itemForm({ ...item, display: "iconRipple" } as FloorItem).data.ripple).toBe(true);
+    expect(itemForm({ ...item, display: "iconRipple" } as FloorItem, undefined, undefined, bulb).data.ripple).toBe(true);
   });
 
   it("offers Show name, and Label size only while a label line renders (#61, #59)", () => {
@@ -609,6 +641,32 @@ describe("itemForm", () => {
     ).toBe("below");
   });
 
+  it("asks which entity a more-info tap opens", () => {
+    const names = (it: FloorItem) => itemForm(it).fields.map((x) => x.name);
+    // A sensor's tap already opens more-info, so the target is asked up front.
+    const sensor = { ...item, entity: "sensor.temp", kind: "sensor" } as FloorItem;
+    expect(names(sensor)).toContain("moreInfoEntity");
+    expect(itemForm(sensor).data.moreInfoEntity).toBe("");
+    // A light toggles, so the question waits until the tap is more-info.
+    expect(names(item)).not.toContain("moreInfoEntity");
+    const info = { ...item, tap_action: { action: "more-info", entity: "light.shelf" } } as FloorItem;
+    expect(names(info)).toContain("moreInfoEntity");
+    expect(itemForm(info).data.moreInfoEntity).toBe("light.shelf");
+    // Picking a target writes it onto the tap, including a sensor that had none stored.
+    expect(itemForm(sensor).toPatch({ moreInfoEntity: "light.shelf" }).tap_action).toEqual({
+      action: "more-info",
+      entity: "light.shelf",
+    });
+    // Clearing it on a sensor returns to the default, which already opens this device.
+    expect(
+      itemForm({ ...sensor, tap_action: { action: "more-info", entity: "light.shelf" } } as FloorItem).toPatch({
+        moreInfoEntity: undefined,
+      }).tap_action
+    ).toBeUndefined();
+    // A light told to open more-info keeps that after the target is cleared.
+    expect(itemForm(info).toPatch({ moreInfoEntity: undefined }).tap_action).toEqual({ action: "more-info" });
+  });
+
   it("offers the three action fields with behavior-preserving defaults", () => {
     const fs = itemForm(item).fields;
     expect(fs.find((x) => x.name === "tap_action")!.selector).toEqual({
@@ -624,7 +682,7 @@ describe("itemForm", () => {
   });
 
   it("data presents effective defaults", () => {
-    const d = itemForm(item).data;
+    const d = itemForm(item, undefined, undefined, bulb).data;
     expect(d.badgeMode).toBe("icon");
     expect(d.ripple).toBe(false);
     expect(d.showState).toBe(false);
@@ -679,8 +737,8 @@ describe("itemForm", () => {
     expect(mode({ display: "ripple", badgeContent: "icon" })).toBe("none");
     expect(mode({ display: "iconRipple", iconAnimation: "spin" })).toBe("spin");
     // The ring is read off `display` alone.
-    expect(itemForm({ ...item, display: "iconRipple" } as FloorItem).data.ripple).toBe(true);
-    expect(itemForm({ ...item, display: "ripple" } as FloorItem).data.ripple).toBe(true);
+    expect(itemForm({ ...item, display: "iconRipple" } as FloorItem, undefined, undefined, bulb).data.ripple).toBe(true);
+    expect(itemForm({ ...item, display: "ripple" } as FloorItem, undefined, undefined, bulb).data.ripple).toBe(true);
   });
 
   it("expands the merged dropdown back into display/animation/content (#127)", () => {
@@ -1917,6 +1975,10 @@ describe("projectReliefForm", () => {
       "sunShade",
       "sunReach",
       "sunFollows",
+      // A sun that sets leaves a night for the moon (issue #201)…
+      "moonlight",
+      // …and following it reads the sky, so its clouds can be asked for.
+      "cloudCoverEntity",
     ]);
     // The angle itself only appears once the light is pinned — while it
     // follows the sun, the angle is not ours to choose.
@@ -1974,6 +2036,9 @@ describe("projectReliefForm", () => {
       sunShade: undefined,
       sunlightColor: undefined,
       sunShadeColor: undefined,
+      moonlight: undefined,
+      // With ambient daylight off too, nothing is left to read the clouds.
+      cloudCoverEntity: undefined,
     });
   });
 
@@ -2148,6 +2213,8 @@ describe("every field lands in exactly one panel group", () => {
       { type: "skylight", width: 60 },
       { type: "skylight", width: 60, entity: "cover.velux" },
       { type: "skylight", width: 60, shutterEntity: "cover.blind", entity: "cover.velux" },
+      { type: "passage" },
+      { type: "passage", entity: "binary_sensor.hall_motion", showIcon: true },
     ]) {
       check(openingForm({ ...base, ...extra } as Opening).fields, OPENING_GROUPS, JSON.stringify(extra));
     }
@@ -2459,6 +2526,110 @@ describe("openingForm — skylights", () => {
       "shutterSecondaryEntity",
     ])
       expect(handWritten[k]).toBeUndefined();
+  });
+});
+
+describe("openingForm — passages (issue #309)", () => {
+  const passage = (extra: Partial<Opening> = {}) =>
+    ({ ...door, type: "passage", ...extra }) as Opening;
+  const names = (o: Opening) => openingForm(o).fields.map((x) => x.name);
+
+  it("is offered as a type, next to the door it stands in for", () => {
+    const f = openingForm(door).fields.find((x) => x.name === "type")!;
+    const values = (f.selector as { select: { options: { value: string }[] } }).select.options.map(
+      (x) => x.value
+    );
+    expect(values.slice(0, 2)).toEqual(["door", "passage"]);
+  });
+
+  it("asks nothing about a leaf it does not have", () => {
+    const n = names(passage({ entity: "binary_sensor.hall_motion" }));
+    for (const gone of ["motion", "sash", "sashSpan", "hinge", "opens", "slide", "style", "glazed", "invert", "secondaryEntity"])
+      expect(n).not.toContain(gone);
+    // What any opening has without a leaf stays.
+    for (const kept of ["type", "length", "angle", "sunlight", "entity", "showIcon", "shutterEntity"])
+      expect(n).toContain(kept);
+    // Not even when a hand-written plan says it slides.
+    expect(names(passage({ motion: "slide" }))).not.toContain("style");
+  });
+
+  it("does not promise that binding an entity changes its type", () => {
+    const helper = openingForm(passage()).fields.find((f) => f.name === "entity")!.helper ?? "";
+    expect(helper).not.toContain("device class");
+    expect(helper).toContain("always open");
+  });
+
+  it("takes the leaf with it when a door becomes a passage", () => {
+    const out = openingForm({
+      ...door,
+      motion: "slide",
+      sliderStyle: "biparting",
+      sash: "double",
+      sashSpan: 0.5,
+      secondaryEntity: "binary_sensor.b",
+      glazed: true,
+      invert: true,
+    } as Opening).toPatch({ type: "passage" });
+    expect(out.type).toBe("passage");
+    for (const k of ["motion", "sliderStyle", "sash", "sashSpan", "secondaryEntity", "glazed", "invert"]) {
+      expect(k in out).toBe(true);
+      expect(out[k]).toBeUndefined();
+    }
+  });
+
+  it("keeps what hangs over the gap rather than in it", () => {
+    const out = openingForm({
+      ...door,
+      entity: "binary_sensor.a",
+      shutterEntity: "cover.grille",
+      shutterStyle: "roll",
+      flipH: true,
+    } as Opening).toPatch({ type: "passage" });
+    for (const k of ["entity", "shutterEntity", "shutterStyle", "flipH"]) expect(k in out).toBe(false);
+  });
+
+  it("wakes no leaf a hand-written passage was ignoring when it becomes a door", () => {
+    const out = openingForm(
+      passage({ motion: "slide", sliderStyle: "biparting", sash: "double", invert: true, glazed: true })
+    ).toPatch({ type: "door" });
+    expect(out.type).toBe("door");
+    for (const k of ["motion", "sliderStyle", "sash", "invert", "glazed"]) {
+      expect(k in out).toBe(true);
+      expect(out[k]).toBeUndefined();
+    }
+  });
+
+  it("comes back from a round trip as a plain door, shutter and mirror kept", () => {
+    const start = {
+      ...door,
+      motion: "slide",
+      sliderStyle: "biparting",
+      invert: true,
+      flipH: true,
+      shutterEntity: "cover.grille",
+    } as Opening;
+    const asPassage = { ...start, ...openingForm(start).toPatch({ type: "passage" }) } as Opening;
+    const back = { ...asPassage, ...openingForm(asPassage).toPatch({ type: "door" }) } as Opening;
+    expect(back.type).toBe("door");
+    for (const k of ["motion", "sliderStyle", "invert"] as const) expect(back[k]).toBeUndefined();
+    expect(back.flipH).toBe(true);
+    expect(back.shutterEntity).toBe("cover.grille");
+  });
+
+  it("sheds a skylight's second side on the way, too", () => {
+    const out = openingForm({ ...door, type: "skylight", width: 60, ceilingHeight: 2 } as Opening).toPatch({
+      type: "passage",
+    });
+    expect(out.width).toBeUndefined();
+    expect(out.ceilingHeight).toBeUndefined();
+  });
+
+  it("names itself where a tap has to choose", () => {
+    const f = openingForm(passage({ entity: "binary_sensor.a", shutterEntity: "cover.grille" })).fields.find(
+      (x) => x.name === "tapTarget"
+    )!;
+    const labels = (f.selector as { select: { options: { label: string }[] } }).select.options.map((x) => x.label);
+    expect(labels).toContain("The passage");
   });
 });
 

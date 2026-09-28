@@ -198,6 +198,12 @@ describe("wallSolids", () => {
     expect(xs(solids).some((x) => x > 120)).toBe(true);
   });
 
+  it("leaves a passage open the way it leaves a doorway (issue #309)", () => {
+    const passage = { x: 100, y: 0, length: 40, angle: 0, type: "passage" as const };
+    const door = { ...passage, type: "door" as const };
+    expect(wallSolids([wall], [passage], H)).toEqual(wallSolids([wall], [door], H));
+  });
+
   it("lowers a window to a sill and puts glass above it", () => {
     const win = { x: 200, y: 0, length: 60, angle: 0, type: "window" as const };
     const solids = wallSolids([wall], [win], H);
@@ -242,6 +248,13 @@ describe("wallSolids", () => {
 
   it("draws nothing for a wall with no length", () => {
     expect(wallSolids([{ id: "w0", x1: 5, y1: 5, x2: 5, y2: 5, thickness: 8 }], [], H)).toHaveLength(0);
+  });
+  it("stands a railing at half height while keeping a passage gap", () => {
+    const rail = { ...wall, kind: "railing" as const, thickness: 3.2 };
+    const solids = wallSolids([rail], [{ x: 100, y: 0, length: 40, angle: 0, type: "passage" }], H);
+    expect(solids.length).toBeGreaterThan(0);
+    expect(solids.every(s => s.kind === "railing" && s.z1 === H / 2)).toBe(true);
+    for (const x of xs(solids)) expect(x <= 80 + 1e-9 || x >= 120 - 1e-9).toBe(true);
   });
 });
 
