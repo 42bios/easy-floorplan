@@ -141,7 +141,15 @@ import {
 } from "./render";
 import { deadSpacesCached } from "./dead-space";
 import { cssColor, cssColorOr, cssNumber, contrastText } from "./css-safe";
-import { skinStyle, skinTokens, SKIN_ACCENT, SKIN_PAPER, SKIN_TEXT, SKIN_WALL } from "./skins";
+import {
+  skinStyle,
+  skinTokens,
+  MAX_SKIN_WALL_WIDTH,
+  SKIN_ACCENT,
+  SKIN_PAPER,
+  SKIN_TEXT,
+  SKIN_WALL,
+} from "./skins";
 import {
   paletteStyle,
   paletteKey,
@@ -237,6 +245,31 @@ import {
   type Point as TracePoint,
   type TraceTemplate,
 } from "./editor-trace";
+
+/**
+ * Where the thickness new walls are drawn at is remembered, per browser. It is
+ * how you like to draw, not part of any one plan, so it stays out of the
+ * config — and survives closing the editor, which is when it used to reset.
+ */
+const WALL_THICKNESS_KEY = "easy-floorplan:wall-thickness";
+
+function readWallThickness(): number | undefined {
+  try {
+    const v = Number(localStorage.getItem(WALL_THICKNESS_KEY));
+    return v >= 2 && v <= MAX_SKIN_WALL_WIDTH ? v : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function writeWallThickness(v: number | undefined): void {
+  try {
+    if (v === undefined) localStorage.removeItem(WALL_THICKNESS_KEY);
+    else localStorage.setItem(WALL_THICKNESS_KEY, String(v));
+  } catch {
+    /* storage blocked (private window, previews) — the session still keeps it */
+  }
+}
 
 /** How strongly a reference floor shows under the one being drawn. */
 const REF_FLOOR_OPACITY = 0.3;
@@ -443,6 +476,12 @@ export class FloorplanCardEditor extends LitElement {
   @state() private _freeWalls = false;
   /** Default length applied to a freshly placed door/window. User-editable from the context bar. */
   @state() private _defaultOpeningLength = 60;
+  /**
+   * Thickness the next wall is drawn at; `undefined` is the default
+   * WALL_THICKNESS. Follows the last thickness you set — here in the Wall
+   * tool's bar, or on a wall you edited — so a plan drawn at 6 stays at 6.
+   */
+  @state() private _defaultWallThickness: number | undefined = readWallThickness();
   /**
    * The same, for skylights, and separately — a roof light is not the size of
    * a door. Two numbers because it has two sides, and both are set before
@@ -1033,6 +1072,14 @@ export class FloorplanCardEditor extends LitElement {
     const own = this._floor().walls;
     const ref = this._refWalls();
     return ref.length ? [...own, ...ref] : own;
+  }
+
+  /** Remember the thickness new walls are drawn at (clamped like the wall form). */
+  private _setDefaultWallThickness(v: number): void {
+    if (!Number.isFinite(v)) return;
+    const t = Math.min(MAX_SKIN_WALL_WIDTH, Math.max(2, Math.round(v)));
+    this._defaultWallThickness = t === WALL_THICKNESS ? undefined : t;
+    writeWallThickness(this._defaultWallThickness);
   }
 
   /** Nearest existing wall endpoint within ENDPOINT_SNAP, or null. */
@@ -1654,7 +1701,13 @@ export class FloorplanCardEditor extends LitElement {
       const d = this._draft;
       this._draft = null;
       if (d.x1 !== d.x2 || d.y1 !== d.y2) {
-        const wall: Wall = { id: uid("wall"), ...d };
+        const t = this._defaultWallThickness;
+        const wall: Wall = {
+          id: uid("wall"),
+          ...d,
+          // The default stays out of the YAML, like every other default.
+          ...(t !== undefined && t !== WALL_THICKNESS ? { thickness: t } : {}),
+        };
         this._commitFloor({ walls: [...this._floor().walls, wall] });
         this._selection = [{ kind: "wall", id: wall.id }];
       }
@@ -3776,7 +3829,7 @@ export class FloorplanCardEditor extends LitElement {
    */
   private _unitsHint(): string {
     const opening = this._defaultOpeningLength;
-    const wall = WALL_THICKNESS;
+    const wall = this._defaultWallThickness ?? WALL_THICKNESS;
     return (
       `Units are the editor's own measure, the same for every part: a door or window is ` +
       `${opening}, a wall ${wall} thick, one grid square ${this.grid}. Scale the plan so ` +
@@ -4046,6 +4099,20 @@ export class FloorplanCardEditor extends LitElement {
         >
           straighten
         </button>
+        <label class="ctx-field">
+          Thickness
+          <input
+            class="num"
+            type="number"
+            min="2"
+            max=${MAX_SKIN_WALL_WIDTH}
+            step="1"
+            .value=${String(this._defaultWallThickness ?? WALL_THICKNESS)}
+            title="Thickness of the next walls you draw; kept until you change it"
+            @change=${(e: Event) =>
+              this._setDefaultWallThickness(Number((e.target as HTMLInputElement).value))}
+          />
+        </label>
         <span class="ctx-hint">Drag to draw. Endpoints snap to nearby corners to close rooms.</span>
       `;
     } else if (t === "tracker") {
@@ -7097,9 +7164,12 @@ export class FloorplanCardEditor extends LitElement {
       if (!w) return html`${nothing}`;
       const length = Math.round(Math.hypot(w.x2 - w.x1, w.y2 - w.y1));
       return html`
-        ${this._renderForm(wallForm(w), (patch, live) =>
-          this._applyElementPatch("wall", w.id, patch, live)
-        )}
+        ${this._renderForm(wallForm(w), (patch, live) => {
+          this._applyElementPatch("wall", w.id, patch, live);
+          // A thickness you set on a wall is the one you are drawing at.
+          const t = (patch as Partial<Wall>).thickness;
+          if (!live && typeof t === "number") this._setDefaultWallThickness(t);
+        })}
         <div class="row">
           <label>Length</label>
           <input
