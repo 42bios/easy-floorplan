@@ -164,8 +164,19 @@ furniture:
 
 ![The editor's Behavior group for a staircase: Go to floor, then Tap, Hold and Double-tap action](img/furniture-actions.png)
 
-`goToFloor` is to a piece what the zoom is to a room: the thing a tap does when nothing
-else is configured. So the two compose rather than competing —
+Actions live on a small, visible icon at the centre of the furniture. Its surface
+passes taps through to the Area underneath, whether or not the piece has an action.
+This works in both 2D and 3D; the editor still lets you select and move the drawing.
+Only furniture with a runnable action or a floor destination gets an icon.
+
+The icon shows a tap, hold or double-tap symbol according to the first gesture it
+supports, or an up/down staircase for floor navigation. Its tooltip lists all
+available gestures and names the entity or destination. The visible circle is its
+whole touch target: 34 screen pixels across, including after room zoom. It stays
+upright when the plan is rotated and sits on the raised furniture surface in 3D.
+
+`goToFloor` is to a piece what the zoom is to a room: the thing tapping its icon does
+when nothing else is configured. So the two compose rather than competing —
 
 - **`goToFloor` alone** keeps changing floor on tap, exactly as before.
 - **a `tap_action`** replaces the floor change. Its tooltip stops promising a floor it will
@@ -188,15 +199,14 @@ that was never going to fire. A staircase whose `goToFloor` is switched off by a
 `tap_action` that cannot run is inert too; an unusable tap is still a configured one, so it
 suppresses the floor change the same way `none` does.
 
-The button role and the tab stop are earned by the **tap** specifically, not by any gesture.
-Enter and Space are the keyboard's only activation and the card turns both into a tap, so a
-piece whose sole action sits on hold or double-tap would take focus, announce itself as a
-button, and then do nothing when pressed. Such a piece still answers a pointer hold; it
-just does not advertise a control nobody can operate from a keyboard. (Hold and double-tap
-are pointer gestures everywhere on the plan, on items and rooms too, for the same reason.)
+An icon with a **tap** action or floor destination is a keyboard-focusable button;
+Enter and Space activate that tap even when hold and double-tap are also configured.
+A hold-only or double-tap-only icon is named and describes its available gestures,
+but has no button role or tab stop. Those gestures remain pointer-only, as on items
+and rooms. Tapping the furniture surface outside either icon still reaches the Area.
 
-A piece that *does* answer a tap is a button, and the drawing gives a screen reader
-nothing to call it by. Where the floor tooltip is not already naming it, the card names it
+The icon's accessible label names its floor destination or the entity the action
+targets. Where there is no floor destination, the card names it
 after the entity the gesture will act on — the action's own `entity` where it names one —
 using its friendly name, or the entity id. Only `toggle` and `more-info` act on an entity,
 so a `navigate` or a `url` supplies no name; the piece's own `entity` answers instead,
@@ -223,12 +233,13 @@ floors:
       - { id: stairs_down, type: stairs, x: 640, y: 300, w: 80, h: 140, goToFloor: down }
 ```
 
-Click the stairs, change floor. `up` is the next entry in `floors`, `down` the previous —
-the list is read bottom-to-top — and the button's tooltip names the floor it leads to.
+Tap the stairs' up/down icon to change floor; the stair surface itself passes taps
+to the room. `up` is the next entry in `floors`, `down` the previous — the list is
+read bottom-to-top — and the icon's tooltip and accessible label name its destination.
 
 **At the end of the list it leads nowhere, and stops being a button.** An `up` staircase
-on the top floor still draws as a staircase; it just takes no clicks, gets no pointer
-cursor and no tab stop. A control that does nothing is worse than no control. It does not
+on the top floor still draws as a staircase; without another runnable action, it has
+no icon or tab stop and its surface passes taps to the room. It does not
 wrap either: the loft is not above the cellar.
 
 The option is on **furniture generally**, not just the built-in `stairs` symbol — a plan
