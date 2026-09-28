@@ -506,7 +506,7 @@ describe("itemForm", () => {
       //    fields, so they do not appear here — the editor slots them into
       //    their groups.
       // 6. Effects is absent: a plain sensor neither rings nor casts light.
-      ["hideWhenInactive", "tap_action", "hold_action", "double_tap_action"], // 7. Behaviour
+      ["hideWhenInactive", "tap_action", "moreInfoEntity", "hold_action", "double_tap_action"], // 7. Behaviour
     ]);
   });
 
@@ -639,6 +639,32 @@ describe("itemForm", () => {
     expect(
       itemForm({ ...labelled, labelPosition: "above" } as unknown as FloorItem).data.labelPosition
     ).toBe("below");
+  });
+
+  it("asks which entity a more-info tap opens", () => {
+    const names = (it: FloorItem) => itemForm(it).fields.map((x) => x.name);
+    // A sensor's tap already opens more-info, so the target is asked up front.
+    const sensor = { ...item, entity: "sensor.temp", kind: "sensor" } as FloorItem;
+    expect(names(sensor)).toContain("moreInfoEntity");
+    expect(itemForm(sensor).data.moreInfoEntity).toBe("");
+    // A light toggles, so the question waits until the tap is more-info.
+    expect(names(item)).not.toContain("moreInfoEntity");
+    const info = { ...item, tap_action: { action: "more-info", entity: "light.shelf" } } as FloorItem;
+    expect(names(info)).toContain("moreInfoEntity");
+    expect(itemForm(info).data.moreInfoEntity).toBe("light.shelf");
+    // Picking a target writes it onto the tap, including a sensor that had none stored.
+    expect(itemForm(sensor).toPatch({ moreInfoEntity: "light.shelf" }).tap_action).toEqual({
+      action: "more-info",
+      entity: "light.shelf",
+    });
+    // Clearing it on a sensor returns to the default, which already opens this device.
+    expect(
+      itemForm({ ...sensor, tap_action: { action: "more-info", entity: "light.shelf" } } as FloorItem).toPatch({
+        moreInfoEntity: undefined,
+      }).tap_action
+    ).toBeUndefined();
+    // A light told to open more-info keeps that after the target is cleared.
+    expect(itemForm(info).toPatch({ moreInfoEntity: undefined }).tap_action).toEqual({ action: "more-info" });
   });
 
   it("offers the three action fields with behavior-preserving defaults", () => {

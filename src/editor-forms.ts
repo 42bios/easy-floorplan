@@ -1688,6 +1688,11 @@ export function itemGroup7aForm(it: FloorItem): FormSpec {
 }
 /** Group 7: when the device is drawn at all, and what a press does. */
 export function itemBehaviourForm(it: FloorItem): FormSpec {
+  // HA's action editor has no entity field for more-info. The card already
+  // opens `tap_action.entity` when one is set, so the editor asks for it here,
+  // beside the dropdown, and only while a tap actually opens more-info.
+  const tapOpensMoreInfo =
+    (it.tap_action?.action ?? defaultItemAction(it.entity).action) === "more-info";
   return {
     fields: [
       {
@@ -1701,6 +1706,16 @@ export function itemBehaviourForm(it: FloorItem): FormSpec {
         label: "Tap action",
         selector: { ui_action: { default_action: defaultItemAction(it.entity).action } },
       },
+      ...(tapOpensMoreInfo
+        ? [
+            {
+              name: "moreInfoEntity",
+              label: "Open more info for",
+              helper: "Leave empty to open this device",
+              selector: { entity: {} },
+            },
+          ]
+        : []),
       { name: "hold_action", label: "Hold action", selector: { ui_action: { default_action: "none" } } },
       {
         name: "double_tap_action",
@@ -1711,10 +1726,27 @@ export function itemBehaviourForm(it: FloorItem): FormSpec {
     data: {
       hideWhenInactive: it.hideWhenInactive ?? false,
       tap_action: it.tap_action,
+      ...(tapOpensMoreInfo
+        ? { moreInfoEntity: it.tap_action?.entity ?? "" }
+        : {}),
       hold_action: it.hold_action,
       double_tap_action: it.double_tap_action,
     },
-    toPatch: identity,
+    toPatch: (p) => {
+      if (!("moreInfoEntity" in p)) return p;
+      const { moreInfoEntity, ...rest } = p;
+      if (!tapOpensMoreInfo) return rest;
+      const entity = typeof moreInfoEntity === "string" && moreInfoEntity ? moreInfoEntity : undefined;
+      const next: Record<string, unknown> = { ...(it.tap_action ?? {}), action: "more-info" };
+      if (entity) next.entity = entity;
+      else delete next.entity;
+      // A sensor's tap already opens its own more-info. Writing that down with
+      // no other entity would only lengthen the YAML.
+      const bare =
+        next.action === defaultItemAction(it.entity).action &&
+        Object.keys(next).every((k) => k === "action" || next[k] == null);
+      return { ...rest, tap_action: bare ? undefined : next };
+    },
   };
 }
 
