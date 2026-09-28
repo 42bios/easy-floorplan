@@ -49,6 +49,7 @@ import {
   WALL_THICKNESS,
   badgeContentOf,
   domainIconAnimation,
+  entitySupportsGlow,
   isRippleEntity,
   normalizeOverlayScale,
   normalizeOverlayMinWidth,
@@ -1317,21 +1318,28 @@ export function itemBadgeForm(it: FloorItem, badgeSource?: BadgeSourceInfo): For
 /**
  * Group 6: the optional visual extras, each offered only where it means
  * something — a ring on a thermostat says "someone is here", which is a lie,
- * and nothing but a light has a colour to cast.
+ * and a pool of colour belongs to an entity that can actually be on.
  *
  * Returns `undefined` when this device qualifies for neither, so the editor
  * can leave the whole group out rather than print an empty heading.
  *
- * `deviceClass` is the entity's HA device class, resolved off `hass` at the
- * call site as the openings already do theirs: it is what separates a motion
- * sensor from a door contact, and so decides whether the ring is offered at
- * all (issue #127).
+ * `deviceClass` and `entity` are resolved off `hass` at the call site, as the
+ * openings already do theirs. The class separates a motion sensor from a door
+ * contact, and so decides whether the ring is offered at all (issue #127).
+ * The state object is what {@link entitySupportsGlow} reads — colour modes, or
+ * a plain on/off state — rather than the entity's domain.
  */
-export function itemEffectsForm(it: FloorItem, deviceClass?: string): FormSpec | undefined {
+export function itemEffectsForm(
+  it: FloorItem,
+  deviceClass?: string,
+  entity?: { state?: string; attributes?: Record<string, unknown> } | null,
+): FormSpec | undefined {
   const ripple = itemHasRipple(it);
   const canRipple = isRippleEntity(it.entity, deviceClass);
-  const lights = it.kind === "light" || it.entity?.startsWith("light.");
-  if (!canRipple && !lights) return undefined;
+  // A pool already turned on stays editable when the entity has dropped out
+  // of hass, so the control that turns it off does not vanish with it.
+  const casts = entitySupportsGlow(entity) || !!it.glow;
+  if (!canRipple && !casts) return undefined;
   const fields: FormField[] = [];
   if (canRipple) {
     fields.push({
@@ -1368,7 +1376,7 @@ export function itemEffectsForm(it: FloorItem, deviceClass?: string): FormSpec |
       });
     }
   }
-  if (lights) {
+  if (casts) {
     fields.push({
       name: "glow",
       label: "Cast light",
@@ -1680,6 +1688,11 @@ export function itemGroup7aForm(it: FloorItem): FormSpec {
 }
 /** Group 7: when the device is drawn at all, and what a press does. */
 export function itemBehaviourForm(it: FloorItem): FormSpec {
+  // HA's action editor has no entity field for more-info. The card already
+  // opens `tap_action.entity` when one is set, so the editor asks for it here,
+  // beside the dropdown, and only while a tap actually opens more-info.
+  const tapOpensMoreInfo =
+    (it.tap_action?.action ?? defaultItemAction(it.entity).action) === "more-info";
   return {
     fields: [
       {
@@ -1693,6 +1706,16 @@ export function itemBehaviourForm(it: FloorItem): FormSpec {
         label: "Tap action",
         selector: { ui_action: { default_action: defaultItemAction(it.entity).action } },
       },
+      ...(tapOpensMoreInfo
+        ? [
+            {
+              name: "moreInfoEntity",
+              label: "Open more info for",
+              helper: "Leave empty to open this device",
+              selector: { entity: {} },
+            },
+          ]
+        : []),
       { name: "hold_action", label: "Hold action", selector: { ui_action: { default_action: "none" } } },
       {
         name: "double_tap_action",
@@ -1703,10 +1726,27 @@ export function itemBehaviourForm(it: FloorItem): FormSpec {
     data: {
       hideWhenInactive: it.hideWhenInactive ?? false,
       tap_action: it.tap_action,
+      ...(tapOpensMoreInfo
+        ? { moreInfoEntity: it.tap_action?.entity ?? "" }
+        : {}),
       hold_action: it.hold_action,
       double_tap_action: it.double_tap_action,
     },
-    toPatch: identity,
+    toPatch: (p) => {
+      if (!("moreInfoEntity" in p)) return p;
+      const { moreInfoEntity, ...rest } = p;
+      if (!tapOpensMoreInfo) return rest;
+      const entity = typeof moreInfoEntity === "string" && moreInfoEntity ? moreInfoEntity : undefined;
+      const next: Record<string, unknown> = { ...(it.tap_action ?? {}), action: "more-info" };
+      if (entity) next.entity = entity;
+      else delete next.entity;
+      // A sensor's tap already opens its own more-info. Writing that down with
+      // no other entity would only lengthen the YAML.
+      const bare =
+        next.action === defaultItemAction(it.entity).action &&
+        Object.keys(next).every((k) => k === "action" || next[k] == null);
+      return { ...rest, tap_action: bare ? undefined : next };
+    },
   };
 }
 
