@@ -76,8 +76,9 @@ import { projectPlanPoint, projectedCanvasSize, type DisplayFrame } from "./proj
 // imports from there — the same trade `pointInPolygon` made in the other
 // direction. Re-exported so it reads as one of these helpers at every call
 // site, which is what it is.
-import { openingIsSkylight } from "./types";
-export { openingIsSkylight };
+import { openingIsPassage, openingIsSkylight } from "./types";
+import { moonIllumination, moonPosition } from "./moon";
+export { openingIsPassage, openingIsSkylight };
 
 export const WALL_THICKNESS = 8;
 
@@ -178,6 +179,9 @@ export function collectWatchedEntities(c: FloorplanCardConfig): Set<string> {
   // sunBearing reads neither (see sunBearingOf and sunlightStrengthOf), so it
   // needs no subscription.
   if (c.sunDimming || c.ambientDaylight || (c.sunlight && !sunIsPinned(c))) ids.add("sun.sun");
+  // The clouds over that sun (issue #201), for the layers that read them.
+  const cloud = cloudCoverEntityOf(c);
+  if (cloud) ids.add(cloud);
   for (const f of getFloors(c)) {
     for (const o of f.openings) {
       if (o.entity) ids.add(o.entity);
@@ -444,6 +448,38 @@ export function areaColor(a: Area, state: string | undefined): string | undefine
   if (rule) return cssColor(rule);
   if (a.activeColor && entityIsActive(a.entity, state)) return cssColor(a.activeColor);
   return undefined;
+}
+
+/**
+ * Whether this entity can drive a cast-light pool.
+ *
+ * {@link glowPaint} draws a pool while the entity's state is `on`. A light
+ * publishes that it has such a state through `supported_color_modes`
+ * (`onoff`, `brightness`, or a colour mode), and those modes stay on the
+ * entity while it is off or unavailable. A switch publishes no colour modes;
+ * on and off are its whole state, which is the same signal the pool reads.
+ * A plug's device class is `outlet` or `switch`, and those are still that
+ * on/off state. A reading — a unit, an HVAC mode, any other device class —
+ * is not a lamp.
+ */
+export function entitySupportsGlow(
+  entity: { state?: string; attributes?: Record<string, unknown> } | null | undefined,
+): boolean {
+  if (!entity) return false;
+  const attrs = entity.attributes ?? {};
+  const modes = attrs.supported_color_modes;
+  if (Array.isArray(modes) && modes.length > 0) return true;
+  if (typeof attrs.unit_of_measurement === "string" && attrs.unit_of_measurement.length > 0) {
+    return false;
+  }
+  if (attrs.hvac_modes != null) return false;
+  const deviceClass = attrs.device_class;
+  // Home Assistant's switch device classes stay on/off controls even while the
+  // entity is unavailable. Any other class is a reading (motion, door,
+  // temperature) whose "on" is not a lamp.
+  if (deviceClass === "outlet" || deviceClass === "switch") return true;
+  if (typeof deviceClass === "string" && deviceClass.length > 0) return false;
+  return entity.state === "on" || entity.state === "off";
 }
 
 /** The light a device casts right now: a color and how strong at the center. */
@@ -717,6 +753,10 @@ function clipWallToBox(
  * and the mean of it is itself.
  */
 export function openingClearFraction(o: Opening, amount: number, secondAmount?: number): number {
+  // Nothing in the gap, so all of it is always clear (issue #309) — the
+  // mirror of the fixed pane below, and asked first for the same reason: a
+  // bound sensor must not be able to shut it.
+  if (openingIsPassage(o)) return 1;
   // Nothing moves, so nothing is ever clear — whatever a bound sensor says
   // (issue #218). Asked before `amount` is even read, because a fixed pane
   // with a contact on it is exactly the case that would otherwise open.
@@ -1101,6 +1141,10 @@ export function renderGlow(
  *
  * Only Cast-light devices qualify — they are the ones that define a radius.
  * Returns `nothing` when no lamp does, so an ordinary plan pays for no mask.
+ *
+ * `extra` is anything else that holds the night back, painted in black over
+ * the lamps — the moon's patches (issue #201), which clear the dim where they
+ * land the way a lamp's pool does.
  */
 export function renderSunDimMask(
   items: readonly FloorItem[],
@@ -1109,6 +1153,7 @@ export function renderSunDimMask(
   height: number,
   id: string,
   walls?: readonly Wall[],
+  extra: SVGTemplateResult | typeof nothing = nothing,
 ): SVGTemplateResult | typeof nothing {
   // Strength per item, by INDEX — undefined where the lamp contributes nothing.
   // Deliberately not compacted: see the map below.
@@ -1125,7 +1170,7 @@ export function renderSunDimMask(
       radius: paint.radius,
     };
   });
-  if (!clearings.some((v) => v !== undefined)) return nothing;
+  if (!clearings.some((v) => v !== undefined) && extra === nothing) return nothing;
 
   const pad = WALL_THICKNESS;
   return svg`
@@ -1171,6 +1216,7 @@ export function renderSunDimMask(
             <circle cx=${it.x} cy=${it.y} r=${r} fill=${`url(#${gid})`}
                     clip-path=${reach ? `url(#${clipId})` : nothing} />`;
         })}
+        ${extra}
       </mask>
     </defs>`;
 }
@@ -2741,8 +2787,12 @@ export function openingSashSpan(o: Opening): number {
  * but the intent is the same either way: "the opposite of what this would
  * otherwise draw." A swing door marked `invert: true` and left unbound draws
  * shut; an unbound window marked the same way draws open.
+ *
+ * A passage is open and `invert` does not reach it: there is nothing in the
+ * gap that could be drawn shut (issue #309).
  */
 export function openingDefaultOpen(o: Opening): boolean {
+  if (openingIsPassage(o)) return true;
   const natural = o.type === "door" && openingMotion(o) === "swing";
   return o.invert ? !natural : natural;
 }
@@ -2792,9 +2842,10 @@ export function sliderStyleHasTwoLeaves(style: SliderStyle): boolean {
  * - a **two-panel slider** (issue #145), by {@link sliderStyleHasTwoLeaves}.
  *
  * A single-leaf swing door does not: there is nothing to split. Nor does a
- * roll-up, whose curtain is one piece.
+ * roll-up, whose curtain is one piece, or a passage, which has no leaf at all.
  */
 export function openingHasTwoLeaves(o: Opening): boolean {
+  if (openingIsPassage(o)) return false;
   return openingMotion(o) === "swing"
     ? openingSash(o) === "double"
     : sliderStyleHasTwoLeaves(sliderStyleOf(o));
@@ -2941,6 +2992,10 @@ export function openingDeviceClassPatch(
 ): { type?: Opening["type"]; motion?: "slide" | "roll" | undefined } {
   if (!deviceClass) return {};
   if (openingIsSkylight(o)) return {};
+  // Same for a passage (issue #309): whatever is bound to it — a motion
+  // sensor in the doorway, say — did not make it a door, and a guess that
+  // turned it into one would hang a leaf back in a gap drawn empty on purpose.
+  if (openingIsPassage(o)) return {};
   return openingFromDeviceClass(deviceClass);
 }
 
@@ -3589,6 +3644,9 @@ const OPENING_FALLBACK_ICON: Record<OpeningType, { on: string; off: string }> = 
   door: { on: "mdi:door-open", off: "mdi:door-closed" },
   window: { on: "mdi:window-open", off: "mdi:window-closed" },
   skylight: { on: "mdi:window-open-variant", off: "mdi:window-closed-variant" },
+  // One glyph for both: a passage is never shut, so there is no pair to pick
+  // from — the badge's colour still says what its entity is doing.
+  passage: { on: "mdi:arrow-expand-horizontal", off: "mdi:arrow-expand-horizontal" },
 };
 
 /**
@@ -3776,7 +3834,7 @@ export interface OpeningStyle {
 }
 
 /**
- * Render a door or window as an SVG group centered at the origin, then translated
+ * Render an opening as an SVG group centered at the origin, then translated
  * and rotated into place. The wall behind the opening is cut away by the host via
  * an SVG mask (see {@link renderWallMask}), so this draws only the symbol — jambs,
  * swing arc and the moving leaf/sash, which carry CSS classes so the host's styles
@@ -3879,6 +3937,12 @@ export function renderOpening(o: Opening, style: OpeningStyle): SVGTemplateResul
         <!-- the head it is hung from -->
         <line x1=${-gl} y1=${-halfW} x2=${gl} y2=${-halfW}
               stroke=${tone} stroke-width="2.5" />`;
+  } else if (openingIsPassage(o)) {
+    // A gap with nothing in it (issue #309). The wall mask has already cut
+    // the hole, and the hole is the whole symbol: no jambs, no leaf, no arc.
+    // The group is still emitted, so the gap keeps its `data-id` for CSS and
+    // anything layered over it — a shutter — still has a frame to sit in.
+    body = svg``;
   } else if (openingMotion(o) === "swing") {
     // One symbol for every hinged opening. A single-sash window (issue #73)
     // and a plain door draw the same thing; so do a double door and a pair of
@@ -4594,6 +4658,195 @@ export function sunlightStrengthOf(
   return sunIsPinned(cfg) ? 1 : sunlightStrength(elevation);
 }
 
+/**
+ * How much of the sun gets through the clouds for this plan (issue #201):
+ * `cover` is what {@link cloudCover} read, and no reading dims nothing.
+ *
+ * Separate from {@link sunlightStrengthOf} because it does a different job.
+ * That one says whether it is day at all and fades the whole layer, shade
+ * included, since a plan does not keep its shadows after sunset. Clouds only
+ * hide the sun, so they fade what the sun lights and leave the shade where it
+ * was — see {@link SunlightOptions.direct}. A pinned plan ignores them, as it
+ * ignores the sun's height: both are readings of a sky it declined to follow.
+ */
+export function sunThroughCloud(
+  cfg: Pick<FloorplanCardConfig, "sunBearing">,
+  cover: number | undefined,
+): number {
+  return sunIsPinned(cfg) ? 1 : cloudFactor(cover, CLOUD_DIRECT_MIN);
+}
+
+// ---- clouds -----------------------------------------------------------------
+
+/**
+ * What full cloud cover leaves of the **direct** light (issue #201).
+ *
+ * Not zero, although a thick overcast does hide the sun outright. A cover
+ * reading cannot tell that overcast from a veil of high cirrus, which Met.no
+ * reports as cover just the same and which the sun still throws an edged
+ * patch through. Drawn as no sun at all, a plan would be wrong on exactly the
+ * days it is most often looked at. A quarter still reads as "not much sun
+ * today" at a glance.
+ */
+export const CLOUD_DIRECT_MIN = 0.25;
+
+/**
+ * What full cloud cover leaves of the **diffuse** sky light — far more than
+ * the direct light keeps. Clouds hide the sun, not the sky, and an overcast
+ * sky is roughly as bright as a clear one away from the sun. What makes a grey
+ * day read dim is the missing sun patches, and the direct layer already takes
+ * those away.
+ */
+export const CLOUD_DIFFUSE_MIN = 0.7;
+
+/**
+ * Cloud cover, 0..1, from {@link FloorplanCardConfig.cloudCoverEntity} — or
+ * `undefined` when there is no reading.
+ *
+ * A `weather` entity carries it as the `cloud_coverage` attribute; its state
+ * is the condition ("rainy"), not a number. Anything else is read from its
+ * state, which is how integrations that split the weather into sensors report
+ * it. Both are percentages. Through {@link liveSunAttribute} for the reason
+ * that function exists: `Number(null)` is 0, and 0 here is a confidently clear
+ * sky.
+ */
+export function cloudCover(
+  entityId: string | undefined,
+  hass: Pick<RenderHass, "states"> | undefined,
+): number | undefined {
+  if (typeof entityId !== "string" || !entityId) return undefined;
+  const st = hass?.states[entityId];
+  if (!st) return undefined;
+  const pct = liveSunAttribute(
+    entityId.startsWith("weather.") ? st.attributes?.cloud_coverage : st.state
+  );
+  return pct === undefined ? undefined : Math.max(0, Math.min(100, pct)) / 100;
+}
+
+/**
+ * How much of a light the clouds leave, 0..1: all of it under a clear sky,
+ * `min` of it under full cover, and linear between — the share of the day the
+ * sun spends behind a cloud grows with the share of the sky that is cloud.
+ *
+ * No reading dims nothing. Each layer keeps its own policy for a *sun* it
+ * cannot read; an unreadable weather only means the plan does not know about
+ * the clouds, and drawing it as it was before it knew is the honest answer.
+ */
+export function cloudFactor(cover: number | undefined, min: number): number {
+  return cover === undefined ? 1 : 1 - (1 - min) * cover;
+}
+
+// ---- moonlight --------------------------------------------------------------
+
+/**
+ * Colour of moonlight: a cool white, against the sun's warm one. Skins restyle
+ * it through `--fp-skin-moonlight`, as they do the sun's.
+ */
+export const MOON_LIGHT_COLOR = "var(--fp-skin-moonlight, #c4d6ff)";
+
+/**
+ * How strong a full moon high in a dark sky is drawn, where the sun is 1.
+ *
+ * Not to scale — the real ratio is about 1 to 400,000, and a plan drawn to it
+ * would show nothing. What it has to be is clearly weaker than any sun, so a
+ * moonlit room never reads as a sunny one.
+ */
+export const MOON_STRENGTH = 0.6;
+
+/**
+ * How often the card redraws while moonlight is on: about a degree of the
+ * moon's travel across the sky, the cadence Home Assistant itself updates
+ * `sun.sun` at through the day.
+ */
+export const MOON_TICK_MS = 4 * 60_000;
+
+/**
+ * Whether the plan draws moonlight: `moonlight` on, as an add-on to sunlight
+ * that follows the real sun. A pinned sun never sets, so there is no night
+ * for a moon to light.
+ */
+export function moonlightOn(
+  c: Pick<FloorplanCardConfig, "moonlight" | "sunlight" | "sunBearing">,
+): boolean {
+  return c.moonlight === true && c.sunlight === true && !sunIsPinned(c);
+}
+
+/**
+ * How much of the night there is for the moon, 0..1, from `sun.sun`'s
+ * elevation: none while the sun is up, all of it once the sun is
+ * {@link SUN_ELEVATION_NIGHT} below the horizon — where Follow the sun reaches
+ * its night brightness — and eased between.
+ *
+ * It starts where the sunlight ends. The sun's patches are gone at the
+ * horizon (see {@link sunlightStrength}), so dusk hands the light from one to
+ * the other rather than drawing both at once; the moon could not compete with
+ * a twilight sky anyway.
+ *
+ * An unreadable sun means no moonlight. The direct sun fails bright, so an
+ * outage already looks like day, and a moon drawn over it would say it was
+ * night as well.
+ */
+export function moonNightFactor(sunElevation: unknown): number {
+  const e = liveSunAttribute(sunElevation);
+  if (e === undefined || e >= 0) return 0;
+  if (e <= SUN_ELEVATION_NIGHT) return 1;
+  const t = e / SUN_ELEVATION_NIGHT;
+  return t * t * (3 - 2 * t);
+}
+
+/**
+ * The moon's light on this plan at `time`, or `undefined` when there is none
+ * to draw: the moon below the horizon, the sun up, a new moon, or no location
+ * to find the moon from.
+ *
+ * `dir` is the way the light travels, as {@link sunLightDirection} gives it
+ * for the sun; `altitude` is what the reach scales by, exactly as the sun's
+ * elevation does, since a patch is as deep as the opening is tall over the
+ * tangent of the light's angle whatever is shining.
+ */
+export function moonlightOf(
+  c: Pick<FloorplanCardConfig, "north">,
+  time: number,
+  location: { latitude?: unknown; longitude?: unknown } | undefined,
+  sunElevation: unknown,
+  cover?: number,
+): { dir: { x: number; y: number }; strength: number; altitude: number } | undefined {
+  const lat = location?.latitude;
+  const lon = location?.longitude;
+  if (typeof lat !== "number" || !Number.isFinite(lat)) return undefined;
+  if (typeof lon !== "number" || !Number.isFinite(lon)) return undefined;
+  if (!Number.isFinite(time)) return undefined;
+  const night = moonNightFactor(sunElevation);
+  if (!(night > 0)) return undefined;
+  const moon = moonPosition(time, lat, lon);
+  // The same climb out of the horizon the sun's light makes: nothing below
+  // it, full by SUN_ELEVATION_FULL.
+  const strength =
+    MOON_STRENGTH *
+    sunlightStrength(moon.altitude) *
+    moonIllumination(time) *
+    night *
+    cloudFactor(cover, CLOUD_DIRECT_MIN);
+  if (!(strength > 0)) return undefined;
+  return {
+    dir: planDirection(moon.bearing + 180, c.north ?? 0),
+    strength,
+    altitude: moon.altitude,
+  };
+}
+
+/**
+ * The cloud entity, when a layer is going to read it. Direct sunlight reads
+ * the sky only while it follows the real sun; ambient daylight always does.
+ */
+export function cloudCoverEntityOf(
+  c: Pick<FloorplanCardConfig, "cloudCoverEntity" | "sunlight" | "sunBearing" | "ambientDaylight">,
+): string | undefined {
+  const id = typeof c.cloudCoverEntity === "string" ? c.cloudCoverEntity.trim() : "";
+  if (!id) return undefined;
+  return c.ambientDaylight || (c.sunlight && !sunIsPinned(c)) ? id : undefined;
+}
+
 // ---- sunlight through the openings ----------------------------------------
 //
 // The sun is far enough away that its rays arrive parallel, which is what
@@ -5021,6 +5274,9 @@ export function openingAdmitsSun(
  * a surprise to anyone who bound the sash expecting a switch.
  */
 export function openingIsGlazed(o: Pick<Opening, "type" | "glazed">): boolean {
+  // A passage is not, whatever it says: there is nothing in it to be glass
+  // (issue #309). It lets all the light through anyway, as a hole.
+  if (openingIsPassage(o)) return false;
   return o.glazed ?? o.type !== "door";
 }
 
@@ -5238,6 +5494,17 @@ export interface SunlightOptions {
    */
   strength?: number;
   /**
+   * How much of that light reaches the floor as direct sun, 0..1 — what the
+   * clouds leave of it (see {@link sunThroughCloud}). Default 1.
+   *
+   * It fades the patches and the holes they cut in the shade, and leaves the
+   * shade itself alone. That is the difference from `strength`: clouds hide
+   * the sun, they do not lift the shade it left. Scaling the shade with them
+   * made an overcast plan read *brighter* than a sunny one — the shade went
+   * with the sun, and nothing darker came in its place.
+   */
+  direct?: number;
+  /**
    * How far the light carries, as a fraction of the plan's shorter side.
    * Defaults to {@link SUN_REACH}; the card scales it by the sun's height
    * (see {@link sunReachScale}).
@@ -5268,6 +5535,10 @@ export function renderSunlight(
   opts: SunlightOptions,
 ): SVGTemplateResult | typeof nothing {
   const { dir, openAmount, shutterOpen, strength = 1 } = opts;
+  const direct =
+    typeof opts.direct === "number" && Number.isFinite(opts.direct)
+      ? Math.max(0, Math.min(1, opts.direct))
+      : 1;
   const paint = {
     light: opts.light ?? SUN_LIGHT_COLOR,
     // `?? ` would swallow the explicit null that means "no shade at all".
@@ -5511,6 +5782,9 @@ export function renderSunlight(
     gid: string,
     color: string,
     kind: "beam" | "core" | "halo" = "beam",
+    // Scales every stop — how deep a hole this cuts when it is drawn into the
+    // shade mask, which is how clouds thin a patch there too.
+    depth = 1,
   ) => svg`<radialGradient id=${gid} gradientUnits="userSpaceOnUse" cx="0" cy="0" r="1"
               gradientTransform=${`translate(${b.cx} ${b.cy}) rotate(${b.angle}) scale(${b.along} ${b.across})`}>
           ${
@@ -5518,18 +5792,18 @@ export function renderSunlight(
               ? // Even, corner to corner: the ellipse circumscribes the
                 // rectangle, so what ends this patch is the rectangle's own
                 // outline. See SKYLIGHT_CORE.
-                svg`<stop offset="0" stop-color=${color} stop-opacity="1" />
-          <stop offset="0.66" stop-color=${color} stop-opacity="0.92" />
-          <stop offset="1" stop-color=${color} stop-opacity="0.62" />`
+                svg`<stop offset="0" stop-color=${color} stop-opacity=${depth} />
+          <stop offset="0.66" stop-color=${color} stop-opacity=${0.92 * depth} />
+          <stop offset="1" stop-color=${color} stop-opacity=${0.62 * depth} />`
               : kind === "halo"
                 ? // …and the spill past it, which is what keeps that outline
                   // from reading as a cut. Never full strength: it is the
                   // light around the patch, not the patch.
-                  svg`<stop offset="0" stop-color=${color} stop-opacity="0.5" />
-          <stop offset="0.48" stop-color=${color} stop-opacity="0.38" />
+                  svg`<stop offset="0" stop-color=${color} stop-opacity=${0.5 * depth} />
+          <stop offset="0.48" stop-color=${color} stop-opacity=${0.38 * depth} />
           <stop offset="1" stop-color=${color} stop-opacity="0" />`
-                : svg`<stop offset="0" stop-color=${color} stop-opacity="1" />
-          <stop offset="0.45" stop-color=${color} stop-opacity="0.55" />
+                : svg`<stop offset="0" stop-color=${color} stop-opacity=${depth} />
+          <stop offset="0.45" stop-color=${color} stop-opacity=${0.55 * depth} />
           <stop offset="1" stop-color=${color} stop-opacity="0" />`
           }
         </radialGradient>`;
@@ -5545,10 +5819,10 @@ export function renderSunlight(
       <mask id=${shadeId} maskUnits="userSpaceOnUse" x=${x} y=${y} width=${w} height=${h}>
         ${cover("#fff")}
         ${beams.map((b) =>
-          b ? fade(b, b.shadeId, "#000", b.sky ? "core" : "beam") : nothing
+          b ? fade(b, b.shadeId, "#000", b.sky ? "core" : "beam", direct) : nothing
         )}
         ${beams.map((b) =>
-          b && b.halo ? fade(b.halo, b.haloShadeId, "#000", "halo") : nothing
+          b && b.halo ? fade(b.halo, b.haloShadeId, "#000", "halo", direct) : nothing
         )}
         ${beams.map((b) =>
           b && !b.sky
@@ -5632,7 +5906,7 @@ export function renderSunlight(
           ? fade(b.halo, b.haloLightId, cssColorOr(paint.light, SUN_LIGHT_COLOR), "halo")
           : nothing
       )}
-      <g mask=${`url(#${shadowId})`} opacity=${SUN_PATCH_OPACITY * strength}>
+      <g mask=${`url(#${shadowId})`} opacity=${SUN_PATCH_OPACITY * strength * direct}>
         ${beams.map((b) =>
           b && !b.sky
             ? svg`<polygon class="fp-sunbeam" points=${b.points}
@@ -5644,7 +5918,7 @@ export function renderSunlight(
            downwind of it and no others — the reason spelled out above. -->
       ${beams.map((b) =>
         b && b.sky
-          ? svg`<g mask=${`url(#${b.shadowMaskId})`} opacity=${SUN_PATCH_OPACITY * strength}>
+          ? svg`<g mask=${`url(#${b.shadowMaskId})`} opacity=${SUN_PATCH_OPACITY * strength * direct}>
               <polygon class="fp-sunbeam fp-skylight-halo" points=${b.haloPoints}
                        fill=${`url(#${b.haloLightId})`} />
               <polygon class="fp-sunbeam fp-skylight-patch" points=${b.points}

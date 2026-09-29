@@ -12,6 +12,7 @@
  * tests — only the routing underneath it.
  */
 import { afterEach, describe, expect, it } from "vitest";
+import { userEvent } from "@vitest/browser/context";
 import "./floorplan-card";
 import type { FloorplanCard } from "./floorplan-card";
 import type { Furniture, FloorplanCardConfig } from "./types";
@@ -104,7 +105,7 @@ async function mount(piece: Partial<Furniture>, extra: Partial<FloorplanCardConf
     link,
     role: () => link()?.getAttribute("role") ?? undefined,
     spoken: () => link()?.getAttribute("aria-label") ?? undefined,
-    title: () => link()?.querySelector("title")?.textContent?.trim(),
+    title: () => link()?.getAttribute("title"),
     /** Which floor is on screen, read off its label. */
     floor: () =>
       [...root().querySelectorAll(".fp-text")].map((e) => e.textContent?.trim()).join(""),
@@ -133,9 +134,10 @@ describe("a piece of furniture answers the gestures it was given", () => {
     // Issue #121's staircase, unchanged.
     const t = await mount({ goToFloor: "up" });
     expect(t.role()).toBe("button");
-    expect(t.title()).toBe("Go to Upstairs");
+    expect(t.title()).toBe("Go to Upstairs · Tap");
     expect(t.floor()).toBe("Ground");
-    await t.gesture("tap");
+    expect(t.link()!.querySelector("ha-icon")?.getAttribute("icon")).toBe("mdi:stairs-up");
+    await userEvent.click(t.link()!);
     expect(t.floor()).toBe("Upstairs");
   });
 
@@ -151,8 +153,9 @@ describe("a piece of furniture answers the gestures it was given", () => {
       tap_action: { action: "more-info", entity: "light.shelf" } as never,
     });
     expect(t.floor()).toBe("Ground");
-    await t.gesture("tap");
+    await userEvent.click(t.link()!);
     expect(t.floor()).toBe("Ground");
+    expect(moreInfo).toEqual(["light.shelf"]);
   });
 
   it("stops promising a floor it will no longer go to", async () => {
@@ -162,7 +165,7 @@ describe("a piece of furniture answers the gestures it was given", () => {
       goToFloor: "up",
       tap_action: { action: "more-info", entity: "light.shelf" } as never,
     });
-    expect(t.title()).toBeUndefined();
+    expect(t.title()).toBe("Shelf light · Tap");
   });
 
   it("keeps both when the action is on hold instead", async () => {
@@ -171,7 +174,7 @@ describe("a piece of furniture answers the gestures it was given", () => {
       goToFloor: "up",
       hold_action: { action: "more-info", entity: "light.shelf" } as never,
     });
-    expect(t.title()).toBe("Go to Upstairs");
+    expect(t.title()).toBe("Go to Upstairs · Tap, Hold");
     await t.gesture("tap");
     expect(t.floor()).toBe("Upstairs");
   });
@@ -226,10 +229,11 @@ describe("a piece of furniture answers the gestures it was given", () => {
       type: "table",
       hold_action: { action: "more-info", entity: "light.shelf" } as never,
     });
-    expect(held.role()).toBeUndefined();
+    expect(held.role()).toBe("group");
     expect(held.link()!.getAttribute("tabindex")).toBeNull();
-    // No name either: an aria-label belongs to a control, and this is not one.
-    expect(held.spoken()).toBeUndefined();
+    // Its visible gesture mark is named, without promising keyboard activation.
+    expect(held.spoken()).toBe("Shelf light");
+    expect(held.title()).toBe("Shelf light · Hold");
     // The hold itself still works — it just never claimed to be a button.
     await held.gesture("hold");
     expect(moreInfo).toEqual(["light.shelf"]);
@@ -248,7 +252,7 @@ describe("a piece of furniture answers the gestures it was given", () => {
     expect(stairs.link()!.getAttribute("tabindex")).toBe("0");
   });
 
-  it("keeps changing floor when its tap action is one that cannot run", async () => {
+  it("suppresses the floor change when its configured tap cannot run", async () => {
     // An unusable tap is still a *configured* tap, so it suppresses the floor
     // fallback — the same rule `none` follows. With nothing else to answer,
     // the piece goes back to being a drawing.
@@ -371,12 +375,10 @@ describe("a piece of furniture answers the gestures it was given", () => {
     expect(t.spoken()).toBe("standing desk");
   });
 
-  it("leaves the naming to the tooltip when there is one", async () => {
-    // An aria-label would override the <title>, and "stairs" is a worse name
-    // for this button than "Go to Upstairs".
+  it("names the floor destination on the visible navigation control", async () => {
     const t = await mount({ goToFloor: "up" });
-    expect(t.spoken()).toBeUndefined();
-    expect(t.title()).toBe("Go to Upstairs");
+    expect(t.spoken()).toBe("Go to Upstairs");
+    expect(t.title()).toBe("Go to Upstairs · Tap");
   });
 
   it("does nothing on a gesture it was never given", async () => {
