@@ -151,6 +151,7 @@ import {
   zoomedOverlayScale,
   IDENTITY_ZOOM,
   wallThickness,
+  RAILING_WEIGHT,
   type PlanRotation,
   type OpeningStyle,
 } from "./render";
@@ -802,7 +803,8 @@ export class FloorplanCard extends LitElement {
     const walls = standingWalls.map((w) => {
       const a = map(w.x1, w.y1);
       const b = map(w.x2, w.y2);
-      return { id: w.id, x1: a.x, y1: a.y, x2: b.x, y2: b.y, thickness: wallThickness(w.thickness) };
+      return { id: w.id, kind: w.kind, x1: a.x, y1: a.y, x2: b.x, y2: b.y,
+        thickness: wallThickness(w.thickness) * (isRailing(w) ? RAILING_WEIGHT : 1) };
     });
     const openings = active.openings.map((o) => {
       const p = map(o.x, o.y);
@@ -1016,6 +1018,69 @@ export class FloorplanCard extends LitElement {
     }
     if (!this.hass) return;
     executeAction(this, this.hass, { entity: press.entity }, press.config);
+  }
+
+  /** The visible control owns gestures; the furniture drawing always lets room taps through. */
+  private _renderFurnitureAction(
+    f: Furniture,
+    c: FloorplanCardConfig,
+    rot: PlanRotation,
+    floors: readonly Floor[],
+    activeId: string,
+  ): TemplateResult | typeof nothing {
+    const to = furnitureFloorTarget(f, floors, activeId);
+    const runs = (gesture: "tap" | "hold" | "double_tap"): boolean => {
+      const press = furnitureActionForGesture(f, gesture);
+      return !!press && gestureDoesSomething({ entity: press.entity }, press.config);
+    };
+    const hasTap = runs("tap");
+    const hasHold = runs("hold");
+    const hasDoubleClick = runs("double_tap");
+    // A configured tap, even `none` or an unusable action, suppresses navigation.
+    const goesToFloor = !!to && !furnitureActionForGesture(f, "tap");
+    if (!goesToFloor && !hasTap && !hasHold && !hasDoubleClick) return nothing;
+
+    const tappable = hasTap || goesToFloor;
+    const floorName = floors.find((floor) => floor.id === to)?.name;
+    const name = goesToFloor
+      ? (floorName ? `Go to ${floorName}` : "Go to the next floor")
+      : furnitureAccessibleName(f, this.hass, symbolCatalog(c.symbols));
+    const gestures = [tappable && "Tap", hasHold && "Hold", hasDoubleClick && "Double-tap"]
+      .filter(Boolean).join(", ");
+    const icon = goesToFloor
+      ? (floors.findIndex((floor) => floor.id === to) > floors.findIndex((floor) => floor.id === activeId)
+        ? "mdi:stairs-up" : "mdi:stairs-down")
+      : hasTap ? "mdi:gesture-tap" : hasHold ? "mdi:gesture-tap-hold" : "mdi:gesture-double-tap";
+    // Upright HTML, anchored to the same elevated centre as the SVG glyph.
+    // Floor-level coordinates would leave the control below the table in 3D.
+    const frame = this._frame(c, rot);
+    const at = rotatePlanPoint(f.x, f.y, c.width, c.height, rot);
+    const p = projectPlanPoint(at.x, at.y, frame, frame.wallHeight * FURNITURE_HEIGHT_FRACTION);
+    const d = projectedCanvasSize(frame);
+    return html`<div
+        class="fp-furniture-link"
+        data-id=${cssIdent(f.id) ?? nothing}
+        style="left:${(p.x / d.w) * 100}%;top:${(p.y / d.h) * 100}%;"
+        title=${`${name} · ${gestures}`}
+        role=${tappable ? "button" : "group"}
+        tabindex=${tappable ? "0" : nothing}
+        aria-label=${name}
+        aria-description=${`${gestures} actions`}
+        @action=${(ev: CustomEvent<{ action: "tap" | "hold" | "double_tap" }>) =>
+          this._onFurnitureAction(ev, f, floors, to)}
+        @keydown=${(ev: KeyboardEvent) => {
+          if (ev.key !== "Enter" && ev.key !== " ") return;
+          ev.preventDefault();
+          // Keyboard activation is always a tap, never the pointer's hold or
+          // double-tap recognizer. Register before actionHandler's listener.
+          ev.stopImmediatePropagation();
+          if (tappable && !ev.repeat) {
+            this._onFurnitureAction(new CustomEvent("action", { detail: { action: "tap" } }), f, floors, to);
+          }
+        }}
+        .actionHandler=${actionHandler({ hasHold, hasDoubleClick })}>
+      <ha-icon icon=${icon} aria-hidden="true"></ha-icon>
+    </div>`;
   }
 
   private _renderBadge(item: FloorItem, scale: OverlayScale, renderHass: RenderHass | undefined): TemplateResult {
@@ -1342,98 +1407,11 @@ export class FloorplanCard extends LitElement {
     const dimPad = WALL_THICKNESS + (iso ? frame.wallHeight : 0);
     // One furniture glyph, flat. Drawn on the floor on the flat plan and on
     // top of its block under the isometric view — the same drawing either way.
-    const drawFurniture = (f: Furniture): SVGTemplateResult => {
-      const drawn = renderFurniture(
-        f,
-        furnitureColor(f, f.entity ? renderHass?.states[f.entity]?.state : undefined),
-        symbolCatalog(c.symbols)
-      );
-      // Stairs that go somewhere (issue #121). Only when there is a
-      // floor that way: at the top of the building an "up" staircase
-      // is still a staircase, but it takes no clicks rather than
-      // offering a control that does nothing.
-      const to = furnitureFloorTarget(f, floors, active.id);
-      // …and anything else the piece was told to do (issue #284). Hold
-      // and double-tap are asked for separately because the handler
-      // needs to know whether to spend their timers: a staircase with
-      // only a floor change must still answer a tap immediately.
-      //
-      // Whether the gesture could actually *run*, which is a stricter
-      // question than whether one is configured. `hasAction` only says
-      // "present and not `none`", and the guards `executeAction`
-      // applies go further: a `more-info` with no entity to show, a
-      // `navigate` with no path, a `call-service` with no service all
-      // pass it and then do nothing. Asking the weaker question hands
-      // a tab stop and a button role to a piece that answers to
-      // nothing, and spends the hold and double-tap timers on gestures
-      // that cannot fire — so every tap waits out a hold that was
-      // never going to happen.
-      const runs = (g: "tap" | "hold" | "double_tap"): boolean => {
-        const p = furnitureActionForGesture(f, g);
-        return !!p && gestureDoesSomething({ entity: p.entity }, p.config);
-      };
-      const hasHold = runs("hold");
-      const hasDoubleClick = runs("double_tap");
-      const hasTap = runs("tap");
-      // Configured at all, `none` included — a separate question from
-      // whether it does anything. Writing `tap_action: none` on a
-      // staircase is how a plan says "draw the stairs, but do not let
-      // them navigate", so a configured tap suppresses the floor
-      // fallback whether or not it is a no-op. `_onFurnitureAction`
-      // decides the same way, by asking whether a tap was configured
-      // rather than whether it does anything.
-      const tapConfigured = !!furnitureActionForGesture(f, "tap");
-      const goesToFloor = !!to && !tapConfigured;
-      // An inert piece stays inert: no role, no tab stop, no listeners.
-      // A gray diagram that announces itself as a button and then does
-      // nothing is worse than one that says nothing at all.
-      if (!goesToFloor && !hasTap && !hasHold && !hasDoubleClick) return drawn;
-      // The button role and the tab stop are earned by the *tap*, not by
-      // any gesture at all. `actionHandler` turns Enter and Space into
-      // a tap and nothing else, so a piece whose only action sits on
-      // hold or double-tap would take focus, announce itself as a
-      // button, and then do nothing when a keyboard user pressed it —
-      // a promise this card cannot keep.
-      //
-      // Such a piece keeps its listeners, so the hold still works under
-      // a pointer; it just stops advertising a control that cannot be
-      // operated. Hold and double-tap being pointer-only is not new
-      // here — it is true of every item and room on the plan, because
-      // the keyboard has one activation and they are the second and
-      // third gestures on it.
-      const tappable = hasTap || goesToFloor;
-      const name = floors.find((x) => x.id === to)?.name;
-      // Names the gesture that actually runs. A configured tap replaces
-      // the floor change, so promising "Go to Upstairs" would be a lie
-      // on exactly the plans this feature was asked for.
-      const label = goesToFloor ? (name ? `Go to ${name}` : "Go to the next floor") : undefined;
-      // With no floor label there is nothing naming this button, so
-      // say what it is. Only in that case: an `aria-label` would
-      // override the <title> that is already doing the job.
-      //
-      // From the live hass, not `renderHass`, which is the one place
-      // in this template that wants it. `renderHass` is filtered to
-      // the entities the *drawing* watches, and an action's target is
-      // deliberately not one of them — a tap opening a light does not
-      // change how the room looks. Reading the name there would find
-      // nothing and fall back to the raw entity id. It is also what
-      // the gesture itself does: `_onFurnitureAction` hands the live
-      // hass to `executeAction`, so the button is named after the
-      // state it will actually act on, replay or no replay.
-      const spoken = tappable && !label ? furnitureAccessibleName(f, this.hass, symbolCatalog(c.symbols)) : nothing;
-      return svg`<g class="fp-furniture-link"
-            role=${tappable ? "button" : nothing}
-            tabindex=${tappable ? "0" : nothing}
-            aria-label=${spoken}
-            @action=${(ev: CustomEvent<{ action: "tap" | "hold" | "double_tap" }>) =>
-              this._onFurnitureAction(ev, f, floors, to)}
-            .actionHandler=${actionHandler({ hasHold, hasDoubleClick })}>
-          <!-- An SVG tooltip is a <title> child, not a title=
-               attribute: the attribute does nothing here. -->
-          ${label ? svg`<title>${label}</title>` : nothing}
-          ${drawn}
-        </g>`;
-    };
+    const drawFurniture = (f: Furniture): SVGTemplateResult => renderFurniture(
+      f,
+      furnitureColor(f, f.entity ? renderHass?.states[f.entity]?.state : undefined),
+      symbolCatalog(c.symbols)
+    );
     // The block's colour: what the glyph is drawn in, through the same allowlist.
     const furnitureTone = (f: Furniture): string =>
       furnitureColor(f, f.entity ? renderHass?.states[f.entity]?.state : undefined) ??
@@ -1937,7 +1915,7 @@ export class FloorplanCard extends LitElement {
           )}
           <div
             class="items"
-            style="--fp-inv-zoom:${zoomedOverlayScale(zoom.scale, c.zoomedOverlayScale)};"
+            style="--fp-inv-zoom:${zoomedOverlayScale(zoom.scale, c.zoomedOverlayScale)};--fp-furniture-inv-zoom:${1 / zoom.scale};"
           >
             ${active.areas?.map((a) => this._renderAreaLabel(a, c, rot, scale))}
             ${active.texts.map((t) => this._renderText(t, c, rot, scale))}
@@ -1952,6 +1930,11 @@ export class FloorplanCard extends LitElement {
               active.openings.filter((o) => hasOpeningMark(o)),
               (o, i) => `${o.id || i}-opening`,
               (o) => this._renderOpeningMark(o, c, rot, scale, renderHass)
+            )}
+            ${repeat(
+              active.furniture,
+              (f, i) => f.id || i,
+              (f) => this._renderFurnitureAction(f, c, rot, floors, active.id)
             )}
             ${repeat(
               // No entity filter: devices that exist physically but have no HA
@@ -2370,15 +2353,43 @@ export class FloorplanCard extends LitElement {
     .area-tap-target {
       cursor: pointer;
     }
-    /* A staircase that changes floor (issue #121). The pointer is the whole
-       affordance — the symbol already draws an arrow saying which way it
-       goes — and it only exists on a piece that has somewhere to lead. */
+    /* Furniture surfaces always pass input to the room, including pieces with
+       actions. Card-only: the editor must still select and move the drawing. */
+    .fp-furniture { pointer-events: none; }
     .fp-furniture-link {
+      position: absolute;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      /* The visible circle is the whole hit target. It stays finger-sized,
+         independent of canvas scale, projection and room zoom. */
+      box-sizing: border-box;
+      width: ${MIN_TOUCH_TARGET}px;
+      height: ${MIN_TOUCH_TARGET}px;
+      border-radius: 50%;
+      border: 1px solid var(--fp-skin-text, var(--primary-text-color, #212121));
+      background: var(--fp-skin-paper, var(--card-background-color, #fff));
+      color: var(--fp-skin-text, var(--primary-text-color, #212121));
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+      transform: translate(-50%, -50%) scale(var(--fp-furniture-inv-zoom, 1));
+      transition: transform 0.4s ease;
+      pointer-events: auto;
       cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+      -webkit-touch-callout: none;
+      user-select: none;
+    }
+    .fp-furniture-link ha-icon {
+      display: flex;
+      --mdc-icon-size: 20px;
+      pointer-events: none;
     }
     .fp-furniture-link:focus-visible {
-      outline: 2px solid var(--fp-skin-accent, var(--primary-color, #03a9f4));
+      outline: 2px solid var(--fp-skin-text, var(--primary-text-color, #212121));
       outline-offset: 2px;
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .fp-furniture-link { transition: none; }
     }
     svg {
       position: absolute;
@@ -2444,12 +2455,12 @@ export class FloorplanCard extends LitElement {
        shade laid over a side is what makes a box read as a box; a furniture
        block keeps the paper on top so its glyph still reads. Wall faces pass
        taps through; opening panels and furniture keep their own actions. */
-    .fp-iso-wall polygon, .fp-iso-sill polygon { stroke: none; }
+    .fp-iso-wall polygon, .fp-iso-railing polygon, .fp-iso-sill polygon { stroke: none; }
     /* Everything standing in the wall plane fades together. A closed door leaf
        left at full opacity read as a patch of wall that had refused to turn
        transparent, which is what it looks like from the front (issue #261
        review). Glazed panels keep their own glass alpha instead. */
-    .fp-iso-wall, .fp-iso-sill, .fp-iso-panel:not(.fp-iso-glazed) {
+    .fp-iso-wall, .fp-iso-railing, .fp-iso-sill, .fp-iso-panel:not(.fp-iso-glazed) {
       opacity: var(--fp-wall-opacity, 1);
     }
     .fp-iso-panel {
