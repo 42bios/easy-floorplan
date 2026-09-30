@@ -1067,6 +1067,8 @@ export type FurnitureType =
   | "wardrobe"
   | "dresser"
   | "tallDresser"
+  | "ladderShelf"
+  | "bookcase"
   | "rug"
   | "plant"
   | "fridge"
