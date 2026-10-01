@@ -450,6 +450,38 @@ export function areaColor(a: Area, state: string | undefined): string | undefine
   return undefined;
 }
 
+/**
+ * Whether this entity can drive a cast-light pool.
+ *
+ * {@link glowPaint} draws a pool while the entity's state is `on`. A light
+ * publishes that it has such a state through `supported_color_modes`
+ * (`onoff`, `brightness`, or a colour mode), and those modes stay on the
+ * entity while it is off or unavailable. A switch publishes no colour modes;
+ * on and off are its whole state, which is the same signal the pool reads.
+ * A plug's device class is `outlet` or `switch`, and those are still that
+ * on/off state. A reading — a unit, an HVAC mode, any other device class —
+ * is not a lamp.
+ */
+export function entitySupportsGlow(
+  entity: { state?: string; attributes?: Record<string, unknown> } | null | undefined,
+): boolean {
+  if (!entity) return false;
+  const attrs = entity.attributes ?? {};
+  const modes = attrs.supported_color_modes;
+  if (Array.isArray(modes) && modes.length > 0) return true;
+  if (typeof attrs.unit_of_measurement === "string" && attrs.unit_of_measurement.length > 0) {
+    return false;
+  }
+  if (attrs.hvac_modes != null) return false;
+  const deviceClass = attrs.device_class;
+  // Home Assistant's switch device classes stay on/off controls even while the
+  // entity is unavailable. Any other class is a reading (motion, door,
+  // temperature) whose "on" is not a lamp.
+  if (deviceClass === "outlet" || deviceClass === "switch") return true;
+  if (typeof deviceClass === "string" && deviceClass.length > 0) return false;
+  return entity.state === "on" || entity.state === "off";
+}
+
 /** The light a device casts right now: a color and how strong at the center. */
 export interface GlowPaint {
   /** Already through the style-injection allowlist (#64). */
