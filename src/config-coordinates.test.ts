@@ -74,9 +74,24 @@ const examples = import.meta.glob<string>(["../README.md", "../docs/*.md", "../d
   query: "?raw", import: "default", eager: true,
 });
 
+const yamlBlocks = (text: string) => [...text.matchAll(/^[ \t]*```yaml[ \t]*\r?\n([\s\S]*?)^[ \t]*```[ \t]*\r?$/gm)].map(m => m[1]!);
+
 describe("published YAML coordinates survive HA's schema", () => {
+  it("extracts both indented snippets and later top-level YAML fences", () => {
+    const markdown = "  ```yaml\n  disableLabelColor: true\n  ```\n\n```text\nnot YAML\n```\n\n```yaml\nopenings:\n  - { x: 480, y: 141 }\n```\n";
+    expect(yamlBlocks(markdown)).toEqual([
+      "  disableLabelColor: true\n",
+      "openings:\n  - { x: 480, y: 141 }\n",
+    ]);
+    expect(yamlBlocks(markdown.replaceAll("\n", "\r\n"))).toHaveLength(2);
+  });
+
+  it("includes the README openings example in the round-trip checks", () => {
+    expect(yamlBlocks(examples["../README.md"]!).some(block => /^openings:/m.test(block))).toBe(true);
+  });
+
   for (const [file, text] of Object.entries(examples)) {
-    const blocks = file.endsWith(".yaml") ? [text] : [...text.matchAll(/```yaml\n([\s\S]*?)\n```/g)].map(m => m[1]);
+    const blocks = file.endsWith(".yaml") ? [text] : yamlBlocks(text);
     blocks.forEach((block, index) => {
       if (!/(?:^|[\s,{])['"]?y['"]?\s*:/m.test(block)) return;
       it(`${file}, example ${index + 1}`, () => {
