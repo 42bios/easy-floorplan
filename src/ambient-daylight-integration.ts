@@ -1,14 +1,15 @@
 import { nothing, svg, type SVGTemplateResult } from "lit";
-import type { Area, Floor, FloorplanCardConfig, Opening, RenderHass } from "./types";
+import type { Area, Floor, FloorplanCardConfig, Opening, RenderHass, Wall } from "./types";
+import { rectAreaSideWalls } from "./editor-geometry";
 import {
   CLOUD_DIFFUSE_MIN,
   cloudCover,
   cloudCoverEntityOf,
   cloudFactor,
+  glowClearSpan,
   openingClearFraction,
   shutterAmount,
   wallsThatBlock,
-  wallsLightPassesThrough,
 } from "./render";
 import {
   DEFAULT_AMBIENT_DAYLIGHT_STRENGTH,
@@ -17,7 +18,7 @@ import {
   ambientOpeningTransmission,
 } from "./ambient-daylight";
 import { renderAmbientDaylight } from "./ambient-daylight-render";
-import { ambientWallClip, ambientWallLights } from "./ambient-daylight-walls";
+import { ambientWallBlockers, ambientWallClip, ambientWallLights } from "./ambient-daylight-walls";
 
 /** Explicit opt-in: existing plans remain on their old render path. */
 export function ambientDaylightEnabled(
@@ -31,6 +32,25 @@ export interface AmbientDaylightOpeningState {
   amount(opening: Opening): number;
   /** Optional second-leaf travel for two-panel openings. */
   secondAmount(opening: Opening): number | undefined;
+}
+
+const noAreas: readonly Area[] = [];
+const floorWallMemo = new WeakMap<FloorplanCardConfig, { input: readonly Wall[]; areas: readonly Area[]; walls: Wall[] }>();
+
+/** The card's other layers rebuild generated wall arrays on each render.
+ * Derive ours from the original config arrays so topology caches survive HA
+ * state updates, including plans with generated room walls and dividers. */
+function ambientFloorWalls(floor: Pick<Floor, "walls" | "areas">, config: FloorplanCardConfig): Wall[] {
+  const areas = floor.areas.length ? floor.areas : noAreas;
+  const hit = floorWallMemo.get(config);
+  if (hit?.input === floor.walls && hit.areas === areas) return hit.walls;
+  const generated = areas.flatMap(a => rectAreaSideWalls(a.id, a.points, a.sideWalls ?? {}))
+    .filter(w => !w.divider);
+  // setConfig replaces the config object even if a caller reused its arrays.
+  // Give every new config its own wall array to invalidate downstream caches.
+  const walls = wallsThatBlock([...floor.walls, ...generated]);
+  floorWallMemo.set(config, { input: floor.walls, areas, walls });
+  return walls;
 }
 
 /**
@@ -104,8 +124,11 @@ export function renderAmbientDaylightLayer(
   const strength =
     DEFAULT_AMBIENT_DAYLIGHT_STRENGTH *
     cloudFactor(cloudCover(cloudCoverEntityOf(config), hass), CLOUD_DIFFUSE_MIN);
-  const walls = wallsThatBlock(floor.walls);
-  const blockers = wallsLightPassesThrough(walls, floor.openings, o => transmission(o.id));
+  const walls = ambientFloorWalls(floor, config);
+  const blockers = ambientWallBlockers(walls, floor.openings, o => o.sunlight === false ? [0, 0] : glowClearSpan(
+    o, openingState.amount(o), openingState.secondAmount(o),
+    o.shutterEntity ? shutterAmount(hass?.states[o.shutterEntity], o.shutterInvert) : undefined,
+  ));
   const wallLights = ambientWallLights(walls, floor.openings, blockers, elevation, transmission, strength);
   if (wallLights !== undefined) {
     const layers = wallLights.map(light => light

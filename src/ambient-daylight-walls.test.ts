@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { Area, Opening, Wall } from "./types";
 import { ambientPointInArea, ambientOpeningTransmission } from "./ambient-daylight";
-import { ambientWallClip, ambientWallLights, ambientWallRegions } from "./ambient-daylight-walls";
+import { ambientWallBlockers, ambientWallClip, ambientWallLights, ambientWallRegions } from "./ambient-daylight-walls";
 import { buildAmbientDaylightRenderModel } from "./ambient-daylight-render";
-import { wallsLightPassesThrough, wallsThatBlock } from "./render";
+import { glowClearSpan, wallsThatBlock } from "./render";
 
 const rectangle = (x: number, y: number, w: number, h: number): Area["points"] =>
   [{ x, y }, { x: x + w, y }, { x: x + w, y: y + h }, { x, y: y + h }];
@@ -19,7 +19,7 @@ const door: Opening = { id: "inside", type: "door", x: 160, y: 150, length: 70, 
 function lights(walls = outer, openings = [window], amount = 0) {
   const solid = wallsThatBlock(walls);
   const transmission = (id: string) => ambientOpeningTransmission(openings.find(o => o.id === id)!, amount);
-  const blockers = wallsLightPassesThrough(solid, openings, o => transmission(o.id));
+  const blockers = ambientWallBlockers(solid, openings, o => o.sunlight === false ? [0, 0] : glowClearSpan(o, amount));
   return ambientWallLights(solid, openings, blockers, 30, transmission, 0.28);
 }
 const visible = (points: Area["points"] | undefined, x: number, y: number) =>
@@ -37,6 +37,73 @@ describe("ambient daylight follows physical walls (#319)", () => {
     const result = lights([...outer, partition], [window, door], 1)!;
     expect(result[0]?.patch.openingId).toBe("outside");
     expect(result[1]).toBeUndefined();
+  });
+
+  it.each([5, 6])("does not turn a partition %s units from the facade into a sky source", (x) => {
+    const walls = [...outer, { ...partition, x1: x, x2: x }];
+    const result = lights(walls, [window, { ...door, x }], 1)!;
+    expect(result[0]?.patch.openingId).toBe(window.id);
+    expect(result[1]).toBeUndefined();
+  });
+
+  it("keeps a narrow receiving room's own fade distance", () => {
+    const patch = lights([...outer, { ...partition, x1: 6, x2: 6 }])![0]!.patch;
+    expect(patch.gradientEnd).toEqual({ x: 240, y: 150 });
+    expect(visible(patch.clipPoints, 3, 150)).toBe(true);
+    expect(visible(patch.clipPoints, 10, 150)).toBe(false);
+  });
+
+  it("closes an exterior wall gap spanned by an opening without requiring Areas", () => {
+    const walls = [...outer.slice(0, 3),
+      { id: "left-top", x1: 0, y1: 0, x2: 0, y2: 115 },
+      { id: "left-bottom", x1: 0, y1: 185, x2: 0, y2: 300 }];
+    expect(lights(walls)?.[0]?.patch.gradientEnd).toEqual(lights()![0]!.patch.gradientEnd);
+  });
+
+  it("does not enlarge the receiving room when a partition is drawn with a doorway gap", () => {
+    const walls = [...outer,
+      { ...partition, id: "upper", y2: 115 },
+      { ...partition, id: "lower", y1: 185 }];
+    const continuous = lights([...outer, partition], [window, door], 1)![0]!.patch;
+    const gap = lights(walls, [window, door], 1)![0]!.patch;
+    expect(gap.gradientEnd).toEqual(continuous.gradientEnd);
+    expect(gap.opacity).toBe(continuous.opacity);
+    expect(visible(gap.clipPoints, 200, 150)).toBe(true);
+    const closed = lights(walls, [window, door], 0)![0]!.patch;
+    expect(closed.gradientEnd).toEqual(gap.gradientEnd);
+    expect(visible(closed.clipPoints, 200, 150)).toBe(false);
+  });
+
+  it("keeps the Area fallback for gaps without a supported wall opening", () => {
+    const walls = outer.slice(0, 3);
+    expect(lights(walls, [window])).toBeUndefined(); // Jambs do not reach either end.
+    expect(lights(walls, [{ ...window, length: 300, type: "skylight" }])).toBeUndefined();
+    expect(lights(walls, [{ ...window, length: 300 }])?.[0]).toBeDefined();
+  });
+
+  it("snaps a nudged exterior opening to its wall before tracing visibility", () => {
+    const expected = lights()![0]!.patch;
+    const nudged = lights(outer, [{ ...window, x: -3 }])![0]!.patch;
+    expect(nudged.gradientStart).toEqual(expected.gradientStart);
+    expect(nudged.gradientEnd).toEqual(expected.gradientEnd);
+    expect(nudged.clipPoints).toEqual(expected.clipPoints);
+  });
+
+  it("reuses geometry and visibility for brightness changes but invalidates edits and travel", () => {
+    const walls = [...outer, partition], openings = [window, door];
+    const regions = ambientWallRegions(walls, openings);
+    const blockers = ambientWallBlockers(walls, openings, o => glowClearSpan(o, 0));
+    expect(ambientWallRegions(walls, openings)).toBe(regions);
+    expect(ambientWallBlockers(walls, openings, o => glowClearSpan(o, 0))).toBe(blockers);
+    const first = ambientWallLights(walls, openings, blockers, 30, () => 1, 0.28)![0]!.patch;
+    const dimmed = ambientWallLights(walls, openings, blockers, 0, () => 1, 0.2)![0]!.patch;
+    expect(dimmed.clipPoints).toBe(first.clipPoints);
+    expect(dimmed.opacity).toBeLessThan(first.opacity);
+    const opened = ambientWallBlockers(walls, openings, o => glowClearSpan(o, 1));
+    expect(opened).not.toBe(blockers);
+    expect(visible(ambientWallLights(walls, openings, opened, 30, () => 1, 0.28)![0]!.patch.clipPoints, 200, 150)).toBe(true);
+    expect(ambientWallRegions(walls, [...openings])).not.toBe(regions);
+    expect(ambientWallRegions([...walls], openings)).not.toBe(regions);
   });
 
   it("stops the wash at a solid partition", () => {

@@ -1,4 +1,4 @@
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import "./floorplan-card";
 import type { FloorplanCard } from "./floorplan-card";
 import type { Area, FloorplanCardConfig } from "./types";
@@ -25,6 +25,7 @@ async function mount(c: FloorplanCardConfig): Promise<FloorplanCard> {
   card.hass = { states: {
     "sun.sun": { state: "above_horizon", attributes: { elevation: 30, azimuth: 90 } },
     "binary_sensor.door": { state: "on", attributes: { device_class: "door" } },
+    "binary_sensor.closed": { state: "off", attributes: { device_class: "door" } },
   }, entities: {} } as unknown as FloorplanCard["hass"];
   document.body.append(card);
   await card.updateComplete;
@@ -101,4 +102,43 @@ it("still clips the Area fallback against walls when no closed outline exists", 
   const card = await mount(c);
   expect(reaches(card, 120, 170)).toBe(true);
   expect(reaches(card, 220, 170)).toBe(false);
+});
+
+it("keeps a near-facade door internal and its narrow room confined", async () => {
+  const c = config();
+  c.walls!.push({ id: "partition", x1: 26, y1: 20, x2: 26, y2: 320 });
+  c.openings!.push({ id: "inside", type: "door", x: 26, y: 170, length: 70, angle: 90, entity: "binary_sensor.closed" });
+  const card = await mount(c);
+  expect(card.shadowRoot!.querySelectorAll(".fp-ambient-daylight-patch")).toHaveLength(1);
+  expect(reaches(card, 23, 170)).toBe(true);
+  expect(reaches(card, 35, 170)).toBe(false);
+});
+
+it("lights through a window drawn in a wall gap and blocks a closed door in another gap", async () => {
+  const c = config();
+  c.walls = [...c.walls!.slice(0, 3),
+    { id: "left-upper", x1: 20, y1: 20, x2: 20, y2: 135 },
+    { id: "left-lower", x1: 20, y1: 205, x2: 20, y2: 320 },
+    { id: "partition-upper", x1: 180, y1: 20, x2: 180, y2: 135 },
+    { id: "partition-lower", x1: 180, y1: 205, x2: 180, y2: 320 }];
+  c.openings!.push({ id: "inside", type: "door", x: 180, y: 170, length: 70, angle: 90, entity: "binary_sensor.closed" });
+  const card = await mount(c);
+  expect(reaches(card, 120, 170)).toBe(true);
+  expect(reaches(card, 220, 170)).toBe(false);
+  card.hass = { ...card.hass!, states: { ...card.hass!.states,
+    "binary_sensor.closed": { state: "on", attributes: { device_class: "door" } },
+  } } as unknown as FloorplanCard["hass"];
+  await card.updateComplete;
+  // Opening travel animates before the final visibility clip is repainted.
+  await vi.waitFor(() => expect(reaches(card, 220, 170)).toBe(true));
+});
+
+it.each([false, true])("places daylight at the open double-door leaf (flipH=%s)", async flipH => {
+  const c = config();
+  c.walls!.push({ id: "partition", x1: 180, y1: 20, x2: 180, y2: 320 });
+  c.openings!.push({ id: "inside", type: "door", sash: "double", flipH, x: 180, y: 170, length: 70, angle: 90,
+    entity: "binary_sensor.door", secondaryEntity: "binary_sensor.closed" });
+  const card = await mount(c);
+  expect(reaches(card, 220, flipH ? 200 : 140)).toBe(true);
+  expect(reaches(card, 220, flipH ? 140 : 200)).toBe(false);
 });

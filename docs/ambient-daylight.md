@@ -22,7 +22,9 @@ V1 intentionally exposes only the on/off switch. Strength, depth, spread, tint a
 ## Geometry and source classification
 
 Closed **wall outlines** identify the outside of the building. An opening on that
-outline can admit sky light; an internal doorway cannot become a new source merely
+outline can admit sky light; it is attached to its nearest solid wall before source
+classification, so a nearby parallel partition is not mistaken for the facade.
+An internal doorway cannot become a new source merely
 because a room has no label. Solid room side walls participate in the same geometry.
 Dividers and railings do not block light.
 
@@ -34,9 +36,12 @@ edge stops at a solid partition.
 
 Detached buildings have separate outlines. A detached closed loop inside another
 outline, such as a cupboard, is a blocker rather than a second exterior. Wall endpoints
-use the same small welding tolerance as the existing dead-space geometry. Draw walls
-continuously underneath doors and windows; opening states cut the light gaps at render
-time.
+use the same small welding tolerance as the existing dead-space geometry. Walls can
+run continuously underneath doors and windows, or stop at their jambs. An explicit
+wall opening bridges a gap for room detection when both jambs meet solid walls within
+that welding tolerance. Its state still controls how much light passes through; a
+closed door blocks a gap even when no wall was drawn underneath it. Skylights and
+unmarked gaps do not close wall outlines.
 
 **Skylights do not yet supply ambient daylight.** This model needs a source on a wall
 with an inward direction; a roof light needs an overhead spread model. Direct
@@ -49,6 +54,8 @@ clip remain available. An opening touching exactly one Area is a source; touchin
 Areas makes it interior; touching none ignores it. Solid walls still clip those patches.
 In this fallback, complete neighbouring Areas are still necessary and light cannot
 continue across Area boundaries. With neither closed walls nor Areas, no layer is drawn.
+Even one unmarked gap can prevent an outline from closing. Draw a wall across it or
+place a door, window or passage whose jambs meet the wall ends to use wall-derived rooms.
 
 The fallback is selected for the whole floor. On a floor with closed outlines, openings
 outside those outlines are ignored, even if an Area is drawn around them. Close the
@@ -88,7 +95,18 @@ The renderer owns the patch `fill` and `filter`. Card CSS must not replace eithe
 
 ## Remaining boundaries
 
-The wash is a visual approximation: visibility is sampled from the opening centre, not integrated across its full width. Partial passages use the shared centred-gap approximation. It does not model light bouncing around a corner or sky occlusion by buildings outside the outline.
+The wash is a visual approximation: visibility is sampled from the opening centre,
+not integrated across its full width. Interior gaps use the same placed clear spans
+as lamp pools: a double door with one leaf open passes light through that leaf's half,
+including when mirrored. Slider styles that the shared resolver centres remain an
+approximation. Shutter travel scales the source's brightness; a fully closed shutter
+also closes its visibility gap, as it does for lamp pools. The model does not include
+light bouncing around a corner or sky occlusion by buildings outside the outline.
+
+Wall topology and source placement are cached while the wall and opening configuration
+arrays stay unchanged. Visibility polygons are reused while clear spans stay unchanged;
+brightness, sun elevation and cloud updates do not rerun the wall-face walk or visibility
+sweep. Editing geometry or moving an opening leaf invalidates the corresponding cache.
 
 Still outside this layer:
 
