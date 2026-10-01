@@ -1,15 +1,15 @@
 {
   "id": "tallDresser",
-  "name": "dresser — tall & narrow",
+  "name": "tall dresser",
   "category": "bedroom",
-  "keywords": ["IKEA MALM", "chest of drawers", "commode", "storage", "tall narrow", "tallboy", "6 drawers", "kommode", "komode", "høj smal kommode", "skuffer", "80x48"],
-  "size": { "w": 80, "h": 48 },
+  "keywords": ["IKEA MALM", "chest of drawers", "tall narrow tall & narrow", "tallboy", "kommode", "høj smal", "skuffer", "80x48"],
+  "size": {"w": 80, "h": 48},
   "parts": [
-    { "rect": [0, 0, 100, 100], "role": "body" },
-    { "line": [0, 6, 100, 6], "role": "thin" },
-    { "rect": [3, 10, 46, 14], "role": "thin" },
-    { "rect": [51, 10, 46, 14], "role": "thin" },
-    { "repeat": 4, "step": [0, 17], "part": { "rect": [3, 27, 94, 14], "role": "thin" } },
-    { "line": [3, 95, 97, 95], "role": "detail" }
+    {"rect": [0, 0, 100, 100], "role": "body"},
+    {"line": [0, 6, 100, 6], "role": "thin"},
+    {"rect": [3, 10, 46, 13], "role": "thin"},
+    {"rect": [51, 10, 46, 13], "role": "thin"},
+    {"repeat": 4, "step": [0, 17], "part": {"rect": [3, 27, 94, 13], "role": "thin"}},
+    {"line": [3, 95, 97, 95], "role": "detail"}
   ]
 }
