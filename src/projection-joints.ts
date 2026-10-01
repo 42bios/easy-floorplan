@@ -66,14 +66,15 @@ export function joinIsoWalls(
       if (Math.abs(cross) > 1e-6) {
         const t = ((pb.x - pa.x) * b.dy - (pb.y - pa.y) * b.dx) / cross;
         const q = { x: pa.x + a.dx * t, y: pa.y + a.dy * t };
-        // Bevel very acute joins instead of making an unbounded spike.
+        // Bevel very acute joins instead of making an unbounded spike. Those
+        // capped joins can retain overlapping arms with translucent walls.
         if (Math.hypot(q.x - p.x, q.y - p.y) <= 4 * Math.max(a.half, b.half)) return q;
       }
       return { x: (pa.x + pb.x) / 2, y: (pa.y + pb.y) / 2 };
     };
     const joins = rays.map((r, i) => join(r, rays[(i + 1) % rays.length]!));
     // Three or more outlines bound a central polygon. Partition it between
-    // the arms so a T junction has neither a triangular hole nor double fill.
+    // the arms so an uncapped T junction has no hole or double fill.
     const centre = joins.reduce((c, q) => ({ x: c.x + q.x / joins.length, y: c.y + q.y / joins.length }), { x: 0, y: 0 });
     rays.forEach((r, i) => {
       const left = joins[i]!, right = joins[(i + rays.length - 1) % rays.length]!;

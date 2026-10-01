@@ -601,6 +601,8 @@ This remains an isometric 2.5D view. Wall corners share a joined outline, and
 overlapping solids are ordered by their separation and visible faces, so glass
 stays above its sill and a nearer wall hides furniture. Physically intersecting
 objects or cyclic overlaps can still fall back to an approximate painter order.
+Very acute wall joins are bevelled to avoid long spikes; their caps can still
+overlap and show a faint darker patch when walls are translucent.
 Furniture still uses a shared height. Pin-shaped device markers and per-symbol
 heights are also follow-ups.
 

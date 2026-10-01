@@ -366,12 +366,7 @@ export function furnitureSolid(
   return { kind: "furniture", id: f.id, base, z0: 0, z1: height, color, top };
 }
 
-/** Stable fallback depth for disjoint, coplanar or cyclic geometry. */
-export function solidDepth(s: IsoSolid): number {
-  let sum = 0;
-  for (const p of s.base) sum += p.x + p.y;
-  return sum / (s.base.length || 1);
-}
+export { solidDepth } from "./projection-order";
 
 const fmt = (v: number) => String(Math.round(v * 100) / 100);
 const points = (ps: readonly Pt[]) => ps.map((p) => `${fmt(p.x)},${fmt(p.y)}`).join(" ");

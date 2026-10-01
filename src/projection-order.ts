@@ -1,5 +1,10 @@
 import type { IsoSolid, Pt } from "./projection";
 
+/** Stable fallback depth for disjoint, coplanar or cyclic geometry. */
+export function solidDepth(s: IsoSolid): number {
+  return s.base.reduce((sum, p) => sum + p.x + p.y, 0) / (s.base.length || 1);
+}
+
 interface Vertex extends Pt { z: number }
 const EPS = 1e-7;
 const dot = (a: Vertex, b: Vertex) => a.x * b.x + a.y * b.y + a.z * b.z;
@@ -152,7 +157,7 @@ export function sortIsoSolids(solids: readonly IsoSolid[]): IsoSolid[] {
     const vs = vertices(s);
     const shadow = hull(vs.map(p => ({ x: p.x - p.z, y: p.y - p.z })));
     return { s, i, vs, shadow, axes: axes(s), faces: faces(s), next: new Set<number>(), incoming: 0,
-      depth: s.base.reduce((sum, p) => sum + p.x + p.y, 0) / (s.base.length || 1),
+      depth: solidDepth(s),
       xmin: Math.min(...shadow.map(p => p.x)), xmax: Math.max(...shadow.map(p => p.x)),
       ymin: Math.min(...shadow.map(p => p.y)), ymax: Math.max(...shadow.map(p => p.y)) };
   });
