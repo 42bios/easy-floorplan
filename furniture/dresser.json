@@ -1,0 +1,15 @@
+{
+  "id": "dresser",
+  "name": "dresser",
+  "category": "bedroom",
+  "keywords": ["IKEA MALM", "chest of drawers", "low wide low & wide", "double dresser", "kommode", "lav bred", "skuffer", "154x50"],
+  "size": {"w": 154, "h": 50},
+  "parts": [
+    {"rect": [0, 0, 100, 100], "role": "body"},
+    {"line": [0, 8, 100, 8], "role": "thin"},
+    {"line": [50, 8, 50, 93], "role": "thin"},
+    {"repeat": 3, "step": [0, 28], "part": {"rect": [2, 11, 46, 24], "role": "thin"}},
+    {"repeat": 3, "step": [0, 28], "part": {"rect": [52, 11, 46, 24], "role": "thin"}},
+    {"line": [2, 94, 98, 94], "role": "detail"}
+  ]
+}

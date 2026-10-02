@@ -359,7 +359,7 @@ there reads `—`, the same as a device's label.
 
 `{ id, type, x, y, w, h, angle?, hand?, color?, entity?, activeColor?, stateColor?, goToFloor?, tap_action?, hold_action?, double_tap_action?, locked? }`
 
-`type` names a **symbol** — one of the ~26 the card ships with (`table`, `sofa`, `bed`,
+`type` names a **symbol** — one of the built-in symbols (`table`, `sofa`, `bed`,
 `fridge`, `stairs`, …; the full set is [`furniture/`](../furniture), a file each), or one you
 supply yourself. `color` defaults to gray so furniture reads differently from walls; `hand`
 (`left` / `right`) mirrors the symbol, and picks which end an L-shaped `sectional`'s chaise
