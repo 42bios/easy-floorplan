@@ -135,7 +135,7 @@ ceiling is not in the plan at all, so a roof window does something else:
 
 ```yaml
 openings:
-  - { id: velux, type: skylight, x: 450, 'y': 220, length: 100, width: 60, angle: 0,
+  - { id: velux, type: skylight, 'x': 450, 'y': 220, length: 100, width: 60, angle: 0,
       shutterEntity: cover.velux_blind }
 skylightDrop: 0.55   # how far the patch slides before it lands (default)
 ```

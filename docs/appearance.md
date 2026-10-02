@@ -166,7 +166,7 @@ openings:
   - id: bath
     type: window
     motion: awning
-    x: 300
+    'x': 300
     'y': 500
     length: 120
     angle: 0
@@ -218,7 +218,7 @@ each doing a job:
 openings:
   - id: velux
     type: skylight
-    x: 450
+    'x': 450
     'y': 220
     length: 100      # the long side
     width: 60        # the short one — a roof window is a rectangle
@@ -264,7 +264,7 @@ draws only the gap: no leaf, no swing arc, no jambs.
 openings:
   - id: dining_arch
     type: passage
-    x: 428
+    'x': 428
     'y': 1532
     length: 82
     angle: -90
@@ -330,7 +330,7 @@ still in its default corner — and dropping it anywhere stores the point:
 
 ```yaml
 type: custom:easy-floorplan-card
-floorSwitcher: { x: 200, 'y': 152 }
+floorSwitcher: { 'x': 200, 'y': 152 }
 ```
 
 **Canvas units, not screen pixels**, because it is a statement about the drawing: put it in
