@@ -35,7 +35,11 @@ describe("plan sizing with and without container query units (issue #339)", () =
     // Make the real CSS parser reject the unit, as pre-container-unit WebViews
     // do. Keep all other card styles and its actual SVG/HTML layers in place.
     // This tests the fallback layout, not an emulation of an Android device.
+    // Check that the width is actually invalidated so a future style rewrite
+    // cannot silently stop exercising the fallback.
+    expect(plan.style.width).toContain("cqh");
     plan.setAttribute("style", plan.getAttribute("style")!.replaceAll("cqh", "unsupported"));
+    expect(plan.style.width).toBe("");
     root.querySelector<HTMLElement>(".stage")!.style.setProperty("container-type", "normal");
     for (const width of [600, 320]) {
       host.style.width = `${width}px`;
