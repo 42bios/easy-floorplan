@@ -721,6 +721,7 @@ export class FloorplanCardEditor extends LitElement {
     this._dragMoves.cancel();
     this._flushDrag();
     this._drag = null;
+    this._traceDrag = null;
     // Same reasoning for the switcher (issue #281): removal takes the capture
     // with it, so the gesture is over either way. `_config` is the host's only
     // copy of where it was dropped, so hand that over rather than rolling back
@@ -3790,6 +3791,8 @@ export class FloorplanCardEditor extends LitElement {
     // The svg's own handler would start a marquee or a wall under the sheet.
     ev.stopPropagation();
     if (ev.button !== 0) return;
+    // One gesture at a time, as on the canvas: keep the original pointer.
+    if (this._traceDrag) return;
     const t = this._trace();
     if (!t) return;
     const p = this._toVirtual(ev, false);
@@ -4109,8 +4112,12 @@ export class FloorplanCardEditor extends LitElement {
             step="1"
             .value=${String(this._defaultWallThickness ?? WALL_THICKNESS)}
             title="Thickness of the next walls you draw; kept until you change it"
-            @change=${(e: Event) =>
-              this._setDefaultWallThickness(Number((e.target as HTMLInputElement).value))}
+            @change=${(e: Event) => {
+              const input = e.target as HTMLInputElement;
+              // Empty/invalid input is NaN, so it keeps the last thickness.
+              this._setDefaultWallThickness(input.valueAsNumber);
+              input.value = String(this._defaultWallThickness ?? WALL_THICKNESS);
+            }}
           />
         </label>
         <span class="ctx-hint">Drag to draw. Endpoints snap to nearby corners to close rooms.</span>
@@ -4383,6 +4390,7 @@ export class FloorplanCardEditor extends LitElement {
                   aria-pressed=${this._tool === t}
                   title=${TOOL_META[t].label}
                   @click=${() => {
+                    this._endTraceMode();
                     this._tool = t;
                     this._draft = null;
                     this._draftTracker = null;
