@@ -320,18 +320,18 @@ door back. A type you chose by hand is never overruled.
 ```yaml
 openings:
   # sliding window, patio-door style, driven by a cover
-  - { id: patio, type: window, motion: slide, sliderStyle: biparting, x: 640, y: 500, length: 160, angle: 0, entity: cover.patio_door }
+  - { id: patio, type: window, motion: slide, sliderStyle: biparting, 'x': 640, 'y': 500, length: 160, angle: 0, entity: cover.patio_door }
   # a two-panel patio slider with a contact on each leaf: the panels stack over
   # the fixed side panels, and each one follows its own sensor
-  - { id: bay, type: window, motion: slide, sliderStyle: biparting-bypass, x: 300, y: 500, length: 200, angle: 0, entity: binary_sensor.sliding_door_left, secondaryEntity: binary_sensor.sliding_door_right }
+  - { id: bay, type: window, motion: slide, sliderStyle: biparting-bypass, 'x': 300, 'y': 500, length: 200, angle: 0, entity: binary_sensor.sliding_door_left, secondaryEntity: binary_sensor.sliding_door_right }
   # the same door with no fixed glass: both leaves slide and stack in the middle
-  - { id: terrace, type: window, motion: slide, sliderStyle: converging, x: 300, y: 700, length: 200, angle: 0, entity: binary_sensor.terrace_left, secondaryEntity: binary_sensor.terrace_right }
+  - { id: terrace, type: window, motion: slide, sliderStyle: converging, 'x': 300, 'y': 700, length: 200, angle: 0, entity: binary_sensor.terrace_left, secondaryEntity: binary_sensor.terrace_right }
   # a casement window with a contact on each sash: one open, one shut
-  - { id: study, type: window, x: 820, y: 100, length: 120, angle: 0, entity: binary_sensor.study_left, secondaryEntity: binary_sensor.study_right }
+  - { id: study, type: window, 'x': 820, 'y': 100, length: 120, angle: 0, entity: binary_sensor.study_left, secondaryEntity: binary_sensor.study_right }
   # a single-sash window behind a pair of shutters, one contact per panel
-  - { id: kitchen, type: window, sash: single, x: 500, y: 100, length: 120, angle: 0, shutterEntity: binary_sensor.persiana_left, shutterStyle: swing, shutterSecondaryEntity: binary_sensor.persiana_right }
+  - { id: kitchen, type: window, sash: single, 'x': 500, 'y': 100, length: 120, angle: 0, shutterEntity: binary_sensor.persiana_left, shutterStyle: swing, shutterSecondaryEntity: binary_sensor.persiana_right }
   # a swing door hinged on the right, opening into the other room
-  - { id: hall, type: door, x: 300, y: 100, length: 80, angle: 0, flipH: true, flipV: true }
+  - { id: hall, type: door, 'x': 300, 'y': 100, length: 80, angle: 0, flipH: true, flipV: true }
 ```
 
 <img width="540" height="304" alt="door_window_demo" src="https://github.com/user-attachments/assets/091b3c89-5202-4025-8a0f-0fe867276be2" />
