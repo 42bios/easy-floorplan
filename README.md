@@ -42,7 +42,7 @@ screen size.
   - **A sensor per leaf** — anything with two leaves takes a second contact and draws them independently: a casement window with one sash open and one shut, a double door ajar on one side, a pair of shutters with one folded back.
 - 🎯 **Colors for on *and* off** 🆕 — a badge could always say what colour it is when on, and nothing about when it is off; a closed door was a line the colour of the wall. `inactiveColor` is the counterpart, on devices and openings both, so the valve that is shut is the one that catches your eye. It means off for every domain at once — `locked`, `closed`, `docked` — which a hand-written state rule cannot. See [Colors for on and off](https://github.com/nicosandller/easy-floorplan/blob/main/docs/behavior.md#colors-for-on-and-off).
 - 📴 **Offline devices read as offline** — an entity that is unavailable, unknown, or gone from Home Assistant is dimmed (or crossed out), instead of looking exactly like a device someone switched off.
-- 🪑 **Furniture** — 28 gray line-art diagrams (table, sofa, bed, stove, stairs, tv…), each bindable to an entity, in a searchable picker. Every one is a plain JSON file of numbers you can copy: draw your own in the editor's paste box, use it straight away, and open a PR when it's good. No SVG, so nothing you paste can run anything.
+- 🪑 **Furniture** — gray line-art furniture symbols (table, sofa, bed, stove, stairs, tv…), each bindable to an entity, in a searchable picker. Every one is a plain JSON file of numbers you can copy: draw your own in the editor's paste box, use it straight away, and open a PR when it's good. No SVG, so nothing you paste can run anything.
 - 🔤 **Live text labels** 🆕 — bind a text to an entity and it shows the reading: a power figure in the corner, a temperature over a room. Type words in front of it, or leave them out for the number alone.
 - 🏠 **Areas** — trace room polygons that color live from an entity, and link them to Home Assistant areas to scope entity pickers and bulk-add devices.
 - 📍 **Live position trackers** — map one or two distance sensors (mmWave / radar) onto a marker that moves across the plan in real time.
@@ -321,18 +321,18 @@ door back. A type you chose by hand is never overruled.
 ```yaml
 openings:
   # sliding window, patio-door style, driven by a cover
-  - { id: patio, type: window, motion: slide, sliderStyle: biparting, x: 640, y: 500, length: 160, angle: 0, entity: cover.patio_door }
+  - { id: patio, type: window, motion: slide, sliderStyle: biparting, 'x': 640, 'y': 500, length: 160, angle: 0, entity: cover.patio_door }
   # a two-panel patio slider with a contact on each leaf: the panels stack over
   # the fixed side panels, and each one follows its own sensor
-  - { id: bay, type: window, motion: slide, sliderStyle: biparting-bypass, x: 300, y: 500, length: 200, angle: 0, entity: binary_sensor.sliding_door_left, secondaryEntity: binary_sensor.sliding_door_right }
+  - { id: bay, type: window, motion: slide, sliderStyle: biparting-bypass, 'x': 300, 'y': 500, length: 200, angle: 0, entity: binary_sensor.sliding_door_left, secondaryEntity: binary_sensor.sliding_door_right }
   # the same door with no fixed glass: both leaves slide and stack in the middle
-  - { id: terrace, type: window, motion: slide, sliderStyle: converging, x: 300, y: 700, length: 200, angle: 0, entity: binary_sensor.terrace_left, secondaryEntity: binary_sensor.terrace_right }
+  - { id: terrace, type: window, motion: slide, sliderStyle: converging, 'x': 300, 'y': 700, length: 200, angle: 0, entity: binary_sensor.terrace_left, secondaryEntity: binary_sensor.terrace_right }
   # a casement window with a contact on each sash: one open, one shut
-  - { id: study, type: window, x: 820, y: 100, length: 120, angle: 0, entity: binary_sensor.study_left, secondaryEntity: binary_sensor.study_right }
+  - { id: study, type: window, 'x': 820, 'y': 100, length: 120, angle: 0, entity: binary_sensor.study_left, secondaryEntity: binary_sensor.study_right }
   # a single-sash window behind a pair of shutters, one contact per panel
-  - { id: kitchen, type: window, sash: single, x: 500, y: 100, length: 120, angle: 0, shutterEntity: binary_sensor.persiana_left, shutterStyle: swing, shutterSecondaryEntity: binary_sensor.persiana_right }
+  - { id: kitchen, type: window, sash: single, 'x': 500, 'y': 100, length: 120, angle: 0, shutterEntity: binary_sensor.persiana_left, shutterStyle: swing, shutterSecondaryEntity: binary_sensor.persiana_right }
   # a swing door hinged on the right, opening into the other room
-  - { id: hall, type: door, x: 300, y: 100, length: 80, angle: 0, flipH: true, flipV: true }
+  - { id: hall, type: door, 'x': 300, 'y': 100, length: 80, angle: 0, flipH: true, flipV: true }
 ```
 
 <img width="540" height="304" alt="door_window_demo" src="https://github.com/user-attachments/assets/091b3c89-5202-4025-8a0f-0fe867276be2" />

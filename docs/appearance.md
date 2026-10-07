@@ -166,8 +166,8 @@ openings:
   - id: bath
     type: window
     motion: awning
-    x: 300
-    y: 500
+    'x': 300
+    'y': 500
     length: 120
     angle: 0
     entity: binary_sensor.bathroom_window
@@ -218,8 +218,8 @@ each doing a job:
 openings:
   - id: velux
     type: skylight
-    x: 450
-    y: 220
+    'x': 450
+    'y': 220
     length: 100      # the long side
     width: 60        # the short one — a roof window is a rectangle
     angle: 0
@@ -264,8 +264,8 @@ draws only the gap: no leaf, no swing arc, no jambs.
 openings:
   - id: dining_arch
     type: passage
-    x: 428
-    y: 1532
+    'x': 428
+    'y': 1532
     length: 82
     angle: -90
 ```
@@ -330,7 +330,7 @@ still in its default corner — and dropping it anywhere stores the point:
 
 ```yaml
 type: custom:easy-floorplan-card
-floorSwitcher: { x: 200, y: 152 }
+floorSwitcher: { 'x': 200, 'y': 152 }
 ```
 
 **Canvas units, not screen pixels**, because it is a statement about the drawing: put it in
@@ -601,10 +601,14 @@ changed. The panels ease to the new position rather than arriving in one frame:
 
 ![Window sashes easing shut over five frames](img/3d-view-panel-travel.png)
 
-This remains an isometric 2.5D view. Depth ordering uses a
-painter's sort and can misorder diagonal walls or large objects. Furniture still
-uses a shared height. Pin-shaped device markers and per-symbol heights are also
-follow-ups.
+This remains an isometric 2.5D view. Wall corners share a joined outline, and
+overlapping solids are ordered by their separation and visible faces, so glass
+stays above its sill and a nearer wall hides furniture. Physically intersecting
+objects or cyclic overlaps can still fall back to an approximate painter order.
+Very acute wall joins are bevelled to avoid long spikes; their caps can still
+overlap and show a faint darker patch when walls are translucent.
+Furniture still uses a shared height. Pin-shaped device markers and per-symbol
+heights are also follow-ups.
 
 For a local preview with simulated entities and view, height, opacity and state
 controls, see [the development preview](../docker/README.md#3d-development-preview).
