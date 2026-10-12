@@ -59,7 +59,6 @@ export const floorSwitcherStyles = css`
     text-overflow: ellipsis;
     white-space: nowrap;
     text-align: center;
-    align-content: center;
   }
   .floor-switcher.buttons .floor-button {
     font-family: inherit;

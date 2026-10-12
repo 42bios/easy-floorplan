@@ -408,6 +408,26 @@ describe("switcher appearance survives editing its position", () => {
     expect(t.emitted[t.emitted.length - 1]?.floorSwitcher).toEqual(appearance);
   });
 
+  it("replaces a hand-written non-object value rather than spreading it", async () => {
+    const t = await mountEditor({ floorSwitcher: "top-right" as unknown as FloorplanCardConfig["floorSwitcher"] });
+    await openSwitcherPanel(t.ed);
+    const select = t.ed.shadowRoot!.querySelector<HTMLSelectElement>("#floor-switcher-style")!;
+    select.value = "buttons";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+    await t.ed.updateComplete;
+    expect(t.emitted[t.emitted.length - 1]?.floorSwitcher).toEqual({ style: "buttons" });
+  });
+
+  it("offers no appearance controls for a plan with one floor", async () => {
+    const t = await mountEditor();
+    const cfg = config();
+    t.ed.setConfig({ ...cfg, floors: cfg.floors!.slice(0, 1) });
+    await t.ed.updateComplete;
+    await openSwitcherPanel(t.ed);
+    expect(t.ed.shadowRoot!.querySelector("#floor-switcher-style")).toBeNull();
+    expect(t.ed.shadowRoot!.querySelector("#floor-switcher-layout")).toBeNull();
+  });
+
   it("preserves appearance when returning to the corner", async () => {
     const t = await mountEditor({ floorSwitcher: { ...appearance, x: 60, y: 100 } });
     await openSwitcherPanel(t.ed);

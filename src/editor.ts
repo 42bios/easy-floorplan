@@ -5886,27 +5886,32 @@ export class FloorplanCardEditor extends LitElement {
     const w = cssNumber(this._config.width, DEFAULT_WIDTH);
     const h = cssNumber(this._config.height, DEFAULT_HEIGHT);
     return html`
-      <div class="row">
-        <label for="floor-switcher-style">Style</label>
-        <select id="floor-switcher-style" .value=${this._config.floorSwitcher?.style ?? "default"}
-          @change=${(e: Event) => this._patchSwitcher({
-            style: (e.target as HTMLSelectElement).value as "default" | "buttons",
-          })}>
-          <option value="default">Classic</option>
-          <option value="buttons">Dashboard buttons</option>
-        </select>
-      </div>
-      <div class="row">
-        <label for="floor-switcher-layout">Layout</label>
-        <select id="floor-switcher-layout" .value=${this._config.floorSwitcher?.layout ?? "auto"}
-          @change=${(e: Event) => this._patchSwitcher({
-            layout: (e.target as HTMLSelectElement).value as "auto" | "horizontal" | "vertical",
-          })}>
-          <option value="auto">Automatic</option>
-          <option value="horizontal">Horizontal</option>
-          <option value="vertical">Vertical</option>
-        </select>
-      </div>
+      <!-- Appearance only matters once there is a switcher to see; a
+           one-floor plan would store a choice with no visible result. -->
+      ${floors.length > 1
+        ? html`
+          <div class="row">
+            <label for="floor-switcher-style">Style</label>
+            <select id="floor-switcher-style" .value=${this._config.floorSwitcher?.style ?? "default"}
+              @change=${(e: Event) => this._patchSwitcher({
+                style: (e.target as HTMLSelectElement).value as "default" | "buttons",
+              })}>
+              <option value="default">Classic</option>
+              <option value="buttons">Dashboard buttons</option>
+            </select>
+          </div>
+          <div class="row">
+            <label for="floor-switcher-layout">Layout</label>
+            <select id="floor-switcher-layout" .value=${this._config.floorSwitcher?.layout ?? "auto"}
+              @change=${(e: Event) => this._patchSwitcher({
+                layout: (e.target as HTMLSelectElement).value as "auto" | "horizontal" | "vertical",
+              })}>
+              <option value="auto">Automatic</option>
+              <option value="horizontal">Horizontal</option>
+              <option value="vertical">Vertical</option>
+            </select>
+          </div>`
+        : nothing}
       <div class="row col">
         <label>Position</label>
         ${floors.length > 1
@@ -5972,7 +5977,11 @@ export class FloorplanCardEditor extends LitElement {
 
   /** Update appearance or placement without dropping the other settings. */
   private _patchSwitcher(patch: NonNullable<FloorplanCardConfig["floorSwitcher"]>): void {
-    const next = { ...this._config.floorSwitcher, ...patch };
+    // A hand-written non-object (`floorSwitcher: "top-right"`) is invalid, and
+    // spreading a string would save it back as character-indexed keys.
+    const current = this._config.floorSwitcher;
+    const base = current && typeof current === "object" && !Array.isArray(current) ? current : {};
+    const next = { ...base, ...patch };
     if (next.style === "default") delete next.style;
     if (next.layout === "auto") delete next.layout;
     const entries = Object.entries(next).filter(([, value]) => value !== undefined);
