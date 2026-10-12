@@ -12,7 +12,7 @@ and control your home in 2D or 3D.
 
 <a name="what-you-can-end-up-with"></a>
 
-https://github.com/user-attachments/assets/8a156cb4-92c2-477a-9b7e-63de15f9b470
+https://github.com/user-attachments/assets/c743c15d-07de-4f5f-9727-3b24b101c7c6
 
 20-second overview: draw walls and doors, connect a Home Assistant entity,
 control lights, and view the plan in 3D.
