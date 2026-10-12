@@ -20,7 +20,7 @@ duplicate and delete them; each floor holds its own set.
 ## Devices
 
 A **device** binds a Home Assistant entity to a spot on the plan. Add one with **+ Add**,
-then pick the entity in the **Element** section below the canvas.
+then pick the entity in the **Selection** inspector.
 
 - **Tap to act** — lights, switches, fans and `input_boolean`s toggle on tap; everything
   else opens the more-info dialog. Covers do too, so an accidental tap can't move a

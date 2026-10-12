@@ -66,7 +66,7 @@ HACS adds the dashboard resource automatically.
 2. In the visual editor, choose **Wall** and drag to draw each wall.
 3. Choose **Door** or **Window** and place it on a wall.
 4. Choose **+ Add → Device**, move it into place, then select its Home Assistant
-   entity in the **Element** section below the canvas.
+   entity in the **Selection** inspector.
 5. **Save** the card and leave dashboard edit mode to try the controls.
 
 The visual editor writes the configuration for you. To start through a **Manual**
@@ -90,10 +90,11 @@ editor and locking finished elements in place.
 | Guide | What it covers |
 | --- | --- |
 | <a name="locking-elements-in-place"></a>[Editor](docs/editor.md) | Applying changes and locking elements in place. |
+| [Editor workspace](docs/editor-workspace.md) | Drawing tools, settings tabs, zoom and phone layouts, with screenshots. |
 | <a name="elements"></a><a name="devices"></a><a name="animations"></a><a name="press-feedback"></a><a name="doors-windows-skylights--passages"></a><a name="areas"></a><a name="live-position-trackers"></a><a name="presence-ripples"></a><a name="fans"></a>[Elements and controls](docs/elements.md) | Devices, openings, rooms, trackers and animations, with examples. |
 | <a name="configuration-reference"></a><a name="more-readings-per-device"></a>[Configuration](docs/configuration.md) | YAML keys, defaults, coordinates and a complete example. |
 | <a name="follow-the-sun"></a><a name="sunlight"></a>[Lighting](docs/lighting.md) | Device light, sun, moon, skylights, ambient daylight and clouds. |
-| <a name="skins"></a><a name="overlay-scale"></a><a name="compact-header"></a><a name="rotation-that-follows-the-screen"></a><a name="styling-hooks-card-mod"></a>[Appearance](docs/appearance.md) | Skins, colors, 3D view, room navigation, scaling and styling. |
+| <a name="skins"></a><a name="overlay-scale"></a><a name="compact-header"></a><a name="rotation-that-follows-the-screen"></a><a name="styling-hooks-card-mod"></a>[Appearance](docs/appearance.md) | Skins, colors, line art, SVG export, 3D view, room navigation, scaling and styling. |
 | <a name="dead-spaces"></a><a name="doors-on-locks"></a><a name="actions-on-rooms"></a><a name="stairs-that-change-floor"></a><a name="offline-devices"></a><a name="advanced-hiding-logic"></a>[Behaviour](docs/behavior.md) | Actions, visibility, floor navigation and unavailable entities. |
 | [Furniture symbols](furniture/README.md) | Creating and contributing your own symbols. |
 | [Video walkthrough](https://youtu.be/M-b7xK-4Bpw) | A community setup guide in Italian. |

@@ -1,7 +1,8 @@
 # Editing a floorplan
 
 Back to the [README](../README.md). Start with [your first plan](../README.md#create-your-first-plan),
-then use the [element guide](elements.md) for individual controls.
+then use the [element guide](elements.md) for individual controls. The
+[editor workspace guide](editor-workspace.md) shows the tools, inspector and phone layouts.
 
 The visual editor lets you draw walls, place openings, move elements, nudge them with
 the arrow keys, multi-select, copy/paste, undo/redo and zoom. Each floor holds its own
@@ -16,7 +17,7 @@ It needs Home Assistant 2025.3 or newer; on older versions the button explains t
 
 ## Locking elements in place
 
-Select anything and press the padlock in the **Element** header. It applies to every kind
+Select anything and press the padlock in the **Selection** inspector's header. It applies to every kind
 of element — walls, doors and windows, devices, text, furniture, trackers and rooms — and
 to a whole multi-selection at once.
 
