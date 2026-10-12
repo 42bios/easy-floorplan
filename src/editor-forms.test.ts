@@ -33,6 +33,7 @@ import type { FormField } from "./editor-forms";
 import type { Area, FloorText, Opening, FloorItem, Floor, Furniture, Tracker, FloorplanCardConfig } from "./types";
 import {
   DEFAULT_GLOW_RADIUS,
+  DEFAULT_STRIP_LENGTH,
   DEFAULT_PRESS_EFFECT,
   MAX_AREA_ZOOM_FIT,
   DEFAULT_ZOOMED_OVERLAY_SCALE,
@@ -517,6 +518,7 @@ describe("itemForm", () => {
       "glow",
       "glowRadius",
       "glowColor",
+      "strip",
     ]);
     expect(itemEffectsForm({ ...item, kind: "sensor", entity: "sensor.t" } as FloorItem)).toBeUndefined();
     // …and the Label group is skipped entirely while nothing labels the device.
@@ -566,6 +568,26 @@ describe("itemForm", () => {
     ).toBeUndefined();
     // A pool already turned on stays editable after the entity drops out.
     expect(names(litSwitch)).toContain("glow");
+  });
+
+  it("turns a cast light into an LED strip and back (#298)", () => {
+    const lamp = { ...item, glow: true } as FloorItem;
+    const fields = (it: FloorItem) => itemEffectsForm(it)!.fields.map((f) => f.name);
+    // The run's own settings wait behind the toggle.
+    expect(fields(lamp)).toContain("strip");
+    expect(fields(lamp)).not.toContain("stripLength");
+    expect(itemEffectsForm(lamp)!.toPatch({ strip: true })).toEqual({ stripLength: DEFAULT_STRIP_LENGTH });
+
+    const run = { ...lamp, stripLength: 240, stripAngle: 90, stripSide: "left" } as FloorItem;
+    expect(fields(run)).toEqual(expect.arrayContaining(["stripLength", "stripAngle", "stripSide"]));
+    expect(itemEffectsForm(run)!.data).toMatchObject({ strip: true, stripLength: 240, stripSide: "left" });
+    // Off clears the run, so the device is a point lamp again — not one with
+    // a stale length waiting to come back.
+    expect(itemEffectsForm(run)!.toPatch({ strip: false })).toEqual({
+      stripLength: undefined,
+      stripAngle: undefined,
+      stripSide: undefined,
+    });
   });
 
   it("offers Ripple on detecting devices only, sized behind the toggle (#127, #202)", () => {

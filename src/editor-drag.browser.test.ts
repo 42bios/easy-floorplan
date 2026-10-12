@@ -1130,3 +1130,76 @@ describe("editor drag", () => {
     document.body.innerHTML = "";
   });
 });
+
+describe("LED strip ends (issue #298)", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  async function mountStrip(extra: Record<string, unknown> = {}) {
+    const host = document.createElement("div");
+    host.style.width = "900px";
+    document.body.appendChild(host);
+    const ed = document.createElement("easy-floorplan-card-editor") as FloorplanCardEditor;
+    ed.hass = { states: {}, entities: {} } as unknown as FloorplanCardEditor["hass"];
+    ed.setConfig({
+      ...config(),
+      floors: [
+        {
+          ...config().floors![0],
+          items: [
+            {
+              id: "strip",
+              kind: "light",
+              entity: "light.strip",
+              x: 500,
+              y: 300,
+              glow: true,
+              stripLength: 200,
+              stripAngle: 0,
+              ...extra,
+            },
+          ],
+        },
+      ],
+    });
+    host.appendChild(ed);
+    await ed.updateComplete;
+    (ed as any)._selection = [{ kind: "item", id: "strip" }];
+    await ed.updateComplete;
+    return ed;
+  }
+
+  it("drags one end while the other stays put", async () => {
+    const ed = await mountStrip({ stripSide: "left" });
+    const handles = ed.shadowRoot!.querySelectorAll<SVGCircleElement>("circle.handle");
+    expect(handles.length).toBe(2);
+    const end = handles[1]!;
+    const from = center(end);
+    // Off both axes, so the wall-style straightening leaves it alone.
+    const to = screenPoint(ed.shadowRoot!.querySelector("svg")!, 600, 500);
+
+    pointer(end, "pointerdown", from.x, from.y);
+    pointer(end, "pointermove", to.x, to.y);
+    await frame();
+    await ed.updateComplete;
+    pointer(end, "pointerup", to.x, to.y);
+    await ed.updateComplete;
+
+    const it = (ed as any)._floor().items[0];
+    // First end still at (400, 300); the run now ends at (600, 500).
+    expect(it.x).toBeCloseTo(500, 1);
+    expect(it.y).toBeCloseTo(400, 1);
+    expect(it.stripLength).toBeCloseTo(Math.hypot(200, 200), 1);
+    expect(it.stripAngle).toBeCloseTo(45, 1);
+    // The lit side is the device's, not the drag's.
+    expect(it.stripSide).toBe("left");
+  });
+
+  it("shows no handles on a pinned strip", async () => {
+    const ed = await mountStrip({ locked: true });
+    expect(ed.shadowRoot!.querySelectorAll("circle.handle").length).toBe(0);
+    // …but still draws where it runs.
+    expect(ed.shadowRoot!.querySelector("line.fp-strip")).toBeTruthy();
+  });
+});

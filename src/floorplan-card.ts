@@ -85,6 +85,8 @@ import {
   glowPaint,
   lightBadgePaint,
   renderGlow,
+  renderStripLine,
+  stripRun,
   renderGlowMask,
   renderSunDimMask,
   wallsLightPassesThrough,
@@ -1882,6 +1884,16 @@ export class FloorplanCard extends LitElement {
                 )
               )}
             </g>
+            <!-- LED strips (issue #298), above the walls: one snapped onto a
+                 wall runs down its centerline and would be buried under it. -->
+            ${standing
+              ? nothing
+              : active.items.map((it) => {
+                  const run = it.glow ? stripRun(it) : undefined;
+                  return run
+                    ? renderStripLine(run, glowPaint(it, renderHass?.states[it.entity])?.color)
+                    : nothing;
+                })}
             ${repeat(
               // Keyed by id: switching floors must create fresh DOM nodes.
               // Unkeyed, Lit morphs floor A's openings into floor B's, and the
@@ -2635,6 +2647,20 @@ export class FloorplanCard extends LitElement {
       .fp-glow {
         transition: none;
       }
+    }
+    /* An LED strip's run (issue #298): thin and round-ended, so it never reads
+       as a wall. Dashed while off, the light's own colour while on. */
+    .fp-strip {
+      stroke: var(--secondary-text-color, #888);
+      stroke-width: 3;
+      stroke-linecap: round;
+      stroke-dasharray: 2 5;
+      opacity: 0.7;
+      pointer-events: none;
+    }
+    .fp-strip.on {
+      stroke-dasharray: none;
+      opacity: 1;
     }
     .fp-door-leaf,
     .fp-leaf-r {
