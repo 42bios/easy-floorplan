@@ -41,6 +41,9 @@ quotes when saving while retaining the required quotes around `'y'`.
 | `rotationLandscape` | number | (same as `rotation`) | Rotation to use while the screen is landscape. The mirror of `rotationPortrait`; set either, or both. |
 | `view` | string | `2d` | `3d` shows standing walls, openings and furniture. Display only; the editor stays flat. See [3D view](appearance.md#3d-view). |
 | `projection` | string | `plan` | Prototype alias: `iso` selects 3D when `view` is unset. |
+| `appearance` | string | `normal` | `line-art` draws crisp outlines on white while keeping device states and actions live. See [Live appearance and view controls](appearance.md#live-appearance-and-view-controls). |
+| `showViewControls` | boolean | `false` (enabled for new plans) | Show 2D/3D, Normal/Line art, quarter-turn rotation and reset controls below the plan. Viewer choices stay local to this card. |
+| `showExport` | boolean | `false` | Offer an optional SVG download in the view controls, or an **Export SVG** button when those controls are hidden. Downloads static line art of the active floor in the current view and rotation. See [SVG export](appearance.md#svg-export). |
 | `wallHeight` | number | `60` | Standing wall height in canvas units, clamped to 0–400. Ignored in 2D. |
 | `wallOpacity` | number | `1` | Standing wall opacity, clamped to 0–1. Furniture and opening panels keep their own paint. Ignored in 2D. |
 | `showDeadSpaces` | boolean | `false` | Hatch every space the walls seal off that no door or window reaches, worked out from the walls and openings themselves. See [Dead spaces](behavior.md#dead-spaces). |
@@ -387,8 +390,11 @@ Bind an **entity** and `stateColor` / `activeColor` recolor the whole diagram �
 goes red when its soil sensor says it needs watering, a cabinet highlights while its
 contact sensor is open.
 
-**`goToFloor`** (`up` / `down`) makes clicking the piece change floor — written for the
-`stairs` symbol. See [Stairs that change floor](behavior.md#stairs-that-change-floor).
+**`goToFloor`** makes tapping the piece's icon change floor: `up` / `down` move one
+floor, `top` / `bottom` choose the last / first floor, and `main` uses `defaultFloor`
+(or the first floor if no valid default is set). Use `{ floor: upstairs }` to go
+directly to a floor by id. Available on any furniture symbol; see
+[Stairs that change floor](behavior.md#stairs-that-change-floor).
 
 **`tap_action` / `hold_action` / `double_tap_action`** give a piece the same actions a room
 has (same shape as a device's). `goToFloor` is to furniture what the zoom is to a room: what
