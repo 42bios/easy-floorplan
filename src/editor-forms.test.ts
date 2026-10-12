@@ -27,10 +27,11 @@ import {
   areaForm,
   areaNameForm,
   itemGroup7aForm,
+  roofForm,
 } from "./editor-forms";
 import { itemHasLabel } from "./render";
 import type { FormField } from "./editor-forms";
-import type { Area, FloorText, Opening, FloorItem, Floor, Furniture, Tracker, FloorplanCardConfig } from "./types";
+import type { Area, FloorText, Opening, FloorItem, Floor, Furniture, Tracker, FloorplanCardConfig, Roof } from "./types";
 import {
   DEFAULT_GLOW_RADIUS,
   DEFAULT_PRESS_EFFECT,
@@ -2759,3 +2760,41 @@ describe("growing badges with the room", () => {
     ).toEqual({ zoomedOverlayScale: undefined });
   });
 });
+
+describe("roofForm", () => {
+  const base: Roof = {
+    id: "r1",
+    type: "gable",
+    points: [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }],
+    height: 40,
+  };
+
+  it("shows highSide only for shed roofs", () => {
+    expect(roofForm({ ...base, type: "shed" }).fields.map((f) => f.name)).toContain("highSide");
+    expect(roofForm({ ...base, type: "gable" }).fields.map((f) => f.name)).not.toContain("highSide");
+    expect(roofForm({ ...base, type: "hip" }).fields.map((f) => f.name)).not.toContain("highSide");
+    expect(roofForm({ ...base, type: "flat" }).fields.map((f) => f.name)).not.toContain("flat" === "flat" ? "highSide" : "something");
+  });
+
+  it("shows ridge orientation only for gable and hip roofs", () => {
+    expect(roofForm({ ...base, type: "gable" }).fields.map((f) => f.name)).toContain("ridge");
+    expect(roofForm({ ...base, type: "hip" }).fields.map((f) => f.name)).toContain("ridge");
+    expect(roofForm({ ...base, type: "shed" }).fields.map((f) => f.name)).not.toContain("ridge");
+    expect(roofForm({ ...base, type: "flat" }).fields.map((f) => f.name)).not.toContain("ridge");
+  });
+
+  it("cleans up irrelevant fields on type switch via toPatch", () => {
+    const spec = roofForm({ ...base, type: "shed", highSide: "top" });
+    // Switching from shed to gable drops highSide
+    const patch = spec.toPatch({ type: "gable" });
+    expect(patch.type).toBe("gable");
+    expect(patch.highSide).toBeUndefined();
+  });
+
+  it("uses default flat slab height of 8 when switching to flat", () => {
+    const spec = roofForm({ ...base, type: "gable" });
+    const patch = spec.toPatch({ type: "flat" });
+    expect(patch.height).toBe(8);
+  });
+});
+

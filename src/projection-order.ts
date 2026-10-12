@@ -2,7 +2,16 @@ import type { IsoSolid, Pt } from "./projection";
 
 /** Stable fallback depth for disjoint, coplanar or cyclic geometry. */
 export function solidDepth(s: IsoSolid): number {
-  return s.base.reduce((sum, p) => sum + p.x + p.y, 0) / (s.base.length || 1);
+  if (s.sortDepth !== undefined) return s.sortDepth;
+  if (s.vertices && s.vertices.length > 0) {
+    const n = s.vertices.length;
+    return s.vertices.reduce((sum, v) => sum + v.x + v.y + v.z, 0) / n;
+  }
+  const baseAvg = s.base.reduce((sum, p) => sum + p.x + p.y, 0) / (s.base.length || 1);
+  if (s.kind === "roof") {
+    return baseAvg + (s.z0 + s.z1) / 2;
+  }
+  return baseAvg;
 }
 
 interface Vertex extends Pt { z: number }

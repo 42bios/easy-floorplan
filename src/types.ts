@@ -1281,6 +1281,35 @@ export type RectAreaSideWallState = "none" | "wall" | "divider";
 export type RectAreaSideWalls = Partial<Record<RectAreaSide, RectAreaSideWallState>>;
 
 /**
+ * Architectural style of a roof structure.
+ */
+export type RoofType = "flat" | "gable" | "hip" | "shed";
+
+/**
+ * A 3D roof structure defined on a floor.
+ */
+export interface Roof {
+  id: string;
+  type: RoofType;
+  /** Vertices in drawing order, virtual canvas units. Implicitly closed. */
+  points: AreaPoint[];
+  /** Ridge height above eaves in canvas units (like wallHeight). */
+  height: number;
+  /** Optional overhang distance past perimeter. Default 0. */
+  overhang?: number;
+  /** Optional surface color. */
+  color?: string;
+  /** Which side is pitched high for a shed (mono-pitch) roof. Reuses RectAreaSide. */
+  highSide?: RectAreaSide;
+  /** Optional ridge orientation override (horizontal vs vertical) for square or custom footprints. */
+  ridge?: "horizontal" | "vertical";
+  /** Optional custom elevation Z offset (for posts/custom placement). Defaults to floor wall top. */
+  elevation?: number;
+  /** Locked state in editor. */
+  locked?: boolean;
+}
+
+/**
  * A named room polygon, drawn point-by-point in the editor and closed by
  * clicking back on the starting vertex. Distinct from a {@link Floor} (a
  * whole level/story) the same way Home Assistant's own "area" (room) sits
@@ -1648,6 +1677,7 @@ export interface Floor {
   furniture: Furniture[];
   trackers: Tracker[];
   areas: Area[];
+  roofs?: Roof[];
 }
 
 /** Sizing mode for the HTML overlay layer. See {@link FloorplanCardConfig.overlayScale}. */
@@ -2112,6 +2142,7 @@ export interface FloorplanCardConfig extends LovelaceCardConfig {
   furniture?: Furniture[];
   trackers?: Tracker[];
   areas?: Area[];
+  roofs?: Roof[];
   /**
    * Symbols this plan defines for itself (issue #90), keyed by id and merged
    * over the shipped `furniture/` library — so you can draw a piece nobody has
@@ -2361,6 +2392,7 @@ export function makeFloor(name: string, walls: Wall[] = []): Floor {
     furniture: [],
     trackers: [],
     areas: [],
+    roofs: [],
   };
 }
 
@@ -2380,7 +2412,15 @@ function normalizeFloor(f: Floor): Floor {
     furniture: f.furniture ?? [],
     trackers: f.trackers ?? [],
     areas: f.areas ?? [],
+    roofs: f.roofs ?? [],
   };
+}
+
+/**
+ * Extract all roofs for a floor.
+ */
+export function getFloorRoofs(f: Floor): Roof[] {
+  return f.roofs ?? [];
 }
 
 /**
@@ -2440,6 +2480,7 @@ export function getFloors(c: FloorplanCardConfig): Floor[] {
       furniture: c.furniture ?? [],
       trackers: c.trackers ?? [],
       areas: c.areas ?? [],
+      roofs: c.roofs ?? [],
     },
   ];
 }

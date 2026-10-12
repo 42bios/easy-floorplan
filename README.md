@@ -103,6 +103,7 @@ HACS adds the dashboard resource automatically.
 | ⚙️ | **[Configuration](https://github.com/nicosandller/easy-floorplan/blob/main/docs/configuration.md)** | Every config key: per-element tables, defaults, a worked example |
 | 💡 | **[Lighting](https://github.com/nicosandller/easy-floorplan/blob/main/docs/lighting.md)** | Follow the sun, and real sunlight through the windows and skylights |
 | 🎨 | **[Appearance](https://github.com/nicosandller/easy-floorplan/blob/main/docs/appearance.md)** | Skins, overlay scale, rotation, and card-mod styling hooks |
+| 🏠 | **[Roofs](docs/roofs.md)** | Roof styles (gable, hip, shed, flat), configuration, overhang, and editing |
 | ⚡ | **[Behaviour](https://github.com/nicosandller/easy-floorplan/blob/main/docs/behavior.md)** | What elements do once an entity is bound |
 | 🐳 | **[Local Home Assistant](https://github.com/nicosandller/easy-floorplan/blob/main/docker/README.md)** | Running the card against a real instance in Docker |
 | 🪑 | **[Furniture symbols](https://github.com/nicosandller/easy-floorplan/blob/main/furniture/README.md)** | Authoring a symbol, and contributing one |
@@ -114,7 +115,7 @@ Below: what you can put on a plan, and links to the guide for each feature.
 
 Everything you place on the plan is an **element**: **devices**, **doors, windows,
 skylights & passages**,
-**furniture**, **text**, **areas** and **trackers**. Select, move, nudge, copy/paste,
+**furniture**, **text**, **areas**, **roofs** and **trackers**. Select, move, nudge, copy/paste,
 duplicate and delete them; each floor holds its own set.
 
 ### Devices
@@ -368,6 +369,19 @@ keeping the name). A link unlocks two things:
 
 Overlapping areas resolve by draw order: the last one drawn wins both the fill on top and
 which room a device counts as inside.
+
+#### Roofs
+
+A **roof** is a first-class architectural roof covering drawn on a floor, allowing you to map and configure building, porch, or gazebo roofs directly in the editor.
+
+Choose the **Roof** tool and either press-drag (>200ms) for a rectangular roof or click corners for a custom polygon outline. You can also select any existing room (area) and click **Create Roof from Room** in the inspector to generate a matching roof over that room in one click.
+
+- **Roof styles** — `gable` (pitched with triangular gable ends), `hip` (sloped inward on all sides), `shed` (mono-pitch sloping plane), and `flat` (horizontal roof slab).
+- **Pitch & ridge** — ridge orientation defaults to the longer dimension (`horizontal` or `vertical`). Shed roofs choose their pitch direction via **High side** (`top`, `bottom`, `left`, `right`).
+- **Overhang & elevation** — adjust eaves overhang and ridge height. Roofs sit directly on the floor's wall top by default.
+- **3D peeking & room focus** — tapping a 3D roof focuses and zooms into the room underneath; while zoomed in, the roof over that room is hidden to reveal the interior details.
+
+See [Roofs](docs/roofs.md) for full configuration options and details.
 
 #### Live position trackers
 

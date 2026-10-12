@@ -21,7 +21,7 @@ import {
 export const RECT_AREA_EPSILON = 0.001;
 
 /** Element kinds addressable by the editor's selection model. */
-export type SelKind = "wall" | "opening" | "item" | "text" | "furniture" | "tracker" | "area";
+export type SelKind = "wall" | "opening" | "item" | "text" | "furniture" | "tracker" | "area" | "roof";
 
 export interface Sel {
   kind: SelKind;
@@ -554,6 +554,10 @@ export function elementsInRect(f: Floor, m: Rect): Sel[] {
     const c = polygonCentroid(a.points);
     if (inside(c.x, c.y)) out.push({ kind: "area", id: a.id });
   }
+  for (const r of f.roofs ?? []) {
+    const c = polygonCentroid(r.points);
+    if (inside(c.x, c.y)) out.push({ kind: "roof", id: r.id });
+  }
   return out;
 }
 
@@ -592,6 +596,12 @@ export function applyDelta(f: Floor, dx: number, dy: number, orig: Map<string, O
         ? { ...el, points: o.points.map((p) => ({ x: p.x + dx, y: p.y + dy })) }
         : el;
     }),
+    roofs: (f.roofs ?? []).map((el) => {
+      const o = orig.get(`roof:${el.id}`);
+      return o && o.kind === "polygon"
+        ? { ...el, points: o.points.map((p) => ({ x: p.x + dx, y: p.y + dy })) }
+        : el;
+    }),
   };
 }
 
@@ -610,6 +620,7 @@ const PICK_ORDER: SelKind[] = [
   "furniture",
   "wall",
   "tracker",
+  "roof",
   // Room polygons are the largest thing on the plan and usually cover
   // everything else in the room, so they pick last — but they *are* in the
   // list, so cycling can still reach them.
@@ -707,6 +718,9 @@ export function elementsAtPoint(
     const p = toLocal(x, y, tr.x + tr.w / 2, tr.y + tr.h / 2, tr.angle ?? 0);
     if (Math.abs(p.x) <= tr.w / 2 && Math.abs(p.y) <= tr.h / 2) push("tracker", tr.id, i, tr.locked);
   });
+  (f.roofs ?? []).forEach((r, i) => {
+    if (pointInPolygon(r.points, x, y)) push("roof", r.id, i, r.locked);
+  });
   (f.areas ?? []).forEach((a, i) => {
     if (pointInPolygon(a.points, x, y)) push("area", a.id, i, a.locked);
   });
@@ -747,6 +761,8 @@ export function findElement(f: Floor, sel: Sel): { id: string; locked?: boolean 
       return (f.trackers ?? []).find((x) => x.id === sel.id);
     case "area":
       return (f.areas ?? []).find((x) => x.id === sel.id);
+    case "roof":
+      return (f.roofs ?? []).find((x) => x.id === sel.id);
   }
 }
 
