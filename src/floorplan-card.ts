@@ -166,6 +166,7 @@ import {
   planProjectionTransform,
   elevationShift,
   wallSolids,
+  openingWallHeight,
   furnitureSolid,
   renderIsoSolids,
   FURNITURE_HEIGHT_FRACTION,
@@ -854,7 +855,8 @@ export class FloorplanCard extends LitElement {
     });
     const solids = wallSolids(walls, openings, frame.wallHeight, false);
     for (const o of active.openings) {
-      solids.push(...openingSolids(o, this._travelling(o, this._openingStyle(o, renderHass)), map, frame.wallHeight));
+      const h = openingWallHeight(o, standingWalls, frame.wallHeight);
+      solids.push(...openingSolids(o, this._travelling(o, this._openingStyle(o, renderHass)), map, h));
     }
     const height = frame.wallHeight * FURNITURE_HEIGHT_FRACTION;
     // The glyph is drawn in plan coordinates, so it is lifted by the plan-space

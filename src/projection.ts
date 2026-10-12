@@ -27,9 +27,9 @@
  */
 import { svg, nothing, type SVGTemplateResult } from "lit";
 import { cssNumber, cssIdent } from "./css-safe";
-import type { WallKind } from "./types";
+import type { WallKind, Wall, OpeningType } from "./types";
 import { OPENING_ON_WALL_EPS } from "./dead-space";
-import { openingIsSkylight, type OpeningType } from "./types";
+import { openingIsSkylight } from "./types";
 import { joinIsoWalls } from "./projection-joints";
 import { sortIsoSolids } from "./projection-order";
 
@@ -228,6 +228,49 @@ interface Span {
   type: "door" | "window";
 }
 
+/**
+ * Find the wall an opening is placed on, if any.
+ * Matches using the same distance and parallel tolerances as openingSpans and dead-space.
+ */
+export function openingWall<W extends { x1: number; y1: number; x2: number; y2: number }>(
+  o: { x: number; y: number; length: number; angle: number; type?: OpeningType },
+  walls: readonly W[]
+): W | undefined {
+  if (o.type === "skylight") return undefined;
+  const rad = (o.angle * Math.PI) / 180;
+  for (const w of walls) {
+    const dx = w.x2 - w.x1;
+    const dy = w.y2 - w.y1;
+    const len = Math.hypot(dx, dy);
+    if (!(len > 1e-6)) continue;
+    const d = { x: dx / len, y: dy / len };
+    const cross = Math.abs(d.x * Math.sin(rad) - d.y * Math.cos(rad));
+    if (cross > PARALLEL_EPS) continue;
+    const rx = o.x - w.x1;
+    const ry = o.y - w.y1;
+    const t = rx * d.x + ry * d.y;
+    if (t < -o.length / 2 || t > len + o.length / 2) continue;
+    const off = Math.abs(rx * -d.y + ry * d.x);
+    if (off <= OPENING_ON_WALL_EPS) return w;
+  }
+  return undefined;
+}
+
+/**
+ * Height an opening should stand in 3D projection: inherited from its underlying wall
+ * when placed on one with custom height (or a railing), or defaulting to wallHeight.
+ */
+export function openingWallHeight(
+  o: { x: number; y: number; length: number; angle: number; type?: OpeningType },
+  walls: readonly (Wall | IsoWallInput)[],
+  defaultWallHeight: number
+): number {
+  const w = openingWall(o, walls);
+  if (!w) return defaultWallHeight;
+  const base = w.height ?? defaultWallHeight;
+  return base * (w.kind === "railing" ? RAILING_HEIGHT_FRACTION : 1);
+}
+
 /** The openings that sit on this wall, as spans along it, clipped and in order. */
 function openingSpans(
   w: IsoWallInput,
@@ -314,18 +357,19 @@ export function wallSolids(
         endEdges: end.slice(1).map((_p, i) => i + 1),
         startEdges: start.slice(1).map((_p, i) => end.length + 1 + i) };
     };
-    const pieces = (s0: number, s1: number, z1: number, kind: IsoSolidKind) => {
+    const pieces = (s0: number, s1: number, z1: number, kind: IsoSolidKind, z0 = 0) => {
       const count = Math.max(1, Math.ceil((s1 - s0) / ISO_CHUNK));
       const step = (s1 - s0) / count;
       for (let i = 0; i < count; i++) {
         const shape = box(s0 + step * i, s0 + step * (i + 1));
-        out.push({ kind, id: w.id, base: shape.base, z0: 0, z1,
+        out.push({ kind, id: w.id, base: shape.base, z0, z1,
           hiddenEdges: [...(i < count - 1 || (s1 >= len && w.end) ? shape.endEdges : []),
             ...(i > 0 || (s0 <= 0 && w.start) ? shape.startEdges : [])] });
       }
     };
     const spans = openingSpans(w, openings, d, len);
     let cursor = 0;
+    const hasHeader = w.kind !== "railing" && height > DEFAULT_WALL_HEIGHT;
     for (const s of spans) {
       // Solid wall up to this opening. The cap only at the wall's real end.
       if (s.s0 > cursor) pieces(cursor === 0 ? -half : cursor, s.s0, height, kind);
@@ -338,6 +382,12 @@ export function wallSolids(
           z0: height * SILL_FRACTION,
           z1: height * GLASS_FRACTION,
         });
+      }
+      if (hasHeader) {
+        const openingTop = height * GLASS_FRACTION;
+        if (height > openingTop + 1e-4) {
+          pieces(s.s0, s.s1, height, kind, openingTop);
+        }
       }
       cursor = s.s1;
     }
