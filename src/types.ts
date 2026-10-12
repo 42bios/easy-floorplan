@@ -1071,6 +1071,7 @@ export type FurnitureType =
   | "bookcase"
   | "rug"
   | "plant"
+  | "indoorPalm"
   | "fridge"
   | "stove"
   | "sink"
@@ -1120,8 +1121,10 @@ export interface Furniture {
   /** Stroke/fill color. Defaults to gray so it reads differently from walls. */
   color?: string;
   /**
-   * Clicking this changes floor (issue #121) — `up` for the next floor in
-   * `floors`, `down` for the previous one.
+   * Clicking this changes floor (issues #121, #327). `up` / `down` move one
+   * entry in `floors`; `top` / `bottom` choose the last / first entry. `main`
+   * uses `defaultFloor`, falling back to the first floor if it is unset or
+   * missing. `{ floor: "id" }` goes to a specific floor by its stable id.
    *
    * Written for the **stairs** symbol, which is where a plan already draws the
    * thing people expect to click: the arrow on a staircase is a promise that
@@ -1132,10 +1135,10 @@ export interface Furniture {
    * `floors` is read bottom-to-top, so `up` is the next entry and `down` the
    * previous. At the end of the list the direction has nowhere to go: the
    * piece draws as ordinary furniture and takes no clicks, rather than
-   * offering a control that does nothing. It does not wrap — a staircase on
-   * the top floor does not lead to the basement.
+   * offering a control that does nothing. Missing destinations and links to
+   * the current floor are inert too. Up/down do not wrap.
    */
-  goToFloor?: "up" | "down";
+  goToFloor?: "up" | "down" | "top" | "bottom" | "main" | { floor: string };
   /**
    * What a gesture on this piece does (issue #284): "I would like the option to
    * select either a floor or the tap actions like we have for areas."
@@ -2081,7 +2084,8 @@ export interface FloorplanCardConfig extends LovelaceCardConfig {
   /** Id of the floor shown first. Falls back to the first floor. */
   defaultFloor?: string;
   /**
-   * Where the floor switcher sits on the plan (issue #281), in canvas units —
+   * Appearance, layout (#353), and position of the floor switcher (#281).
+   * Both coordinates are optional; a position needs both, in canvas units —
    * the point the block of buttons is centred on.
    *
    * If unset, it stays pinned to the plan's top-right corner, which is where it
@@ -2099,7 +2103,14 @@ export interface FloorplanCardConfig extends LovelaceCardConfig {
    * Off-canvas coordinates are honoured rather than clamped — a plan whose
    * walls stop short of the canvas has legitimate empty margin to park it in.
    */
-  floorSwitcher?: { x: number; y: number };
+  floorSwitcher?: {
+    x?: number;
+    y?: number;
+    /** Classic small labels (default), or larger Home Assistant themed buttons. */
+    style?: "default" | "buttons";
+    /** Auto follows compactHeader: horizontal when compact, otherwise vertical. */
+    layout?: "auto" | "horizontal" | "vertical";
+  };
   /** Optional history replay controls and playback defaults. */
   historyReplay?: HistoryReplayConfig;
   walls?: Wall[];

@@ -73,7 +73,7 @@ quotes when saving while retaining the required quotes around `'y'`.
 | `palette`    | Palette[]| —                  | Named colours for this plan, referenced from any colour field as `var(--fp-color-<name>)`. See [Named colors](appearance.md#named-colors). |
 | `floors`     | Floor[]  | —                  | Per-floor element groups (see [Floor](#floor)).   |
 | `defaultFloor`| string  | first floor        | Id of the floor shown first.                 |
-| `floorSwitcher` | `{x, y}` | top-right corner | Where the floor buttons sit on the plan, in canvas units — the point the block is centred on. Drag it on the editor canvas. Follows `rotation` like every other anchor. See [Where the floor switcher sits](appearance.md#where-the-floor-switcher-sits). |
+| `floorSwitcher` | object | classic, automatic layout, top-right corner | Optional `style: default` or `buttons` (larger dashboard buttons); `layout: auto`, `horizontal` or `vertical`. Optional `x` and `y` place the centre in canvas units and follow `rotation`. Style and layout work without coordinates. See [Floor button appearance](appearance.md#floor-button-appearance) and [position](appearance.md#where-the-floor-switcher-sits). |
 | `walls`      | Wall[]   | `[]`               | Wall segments (single-floor / floor 1).      |
 | `openings`   | Opening[]| `[]`               | Doors, windows, skylights and passages.      |
 | `items`      | Item[]   | `[]`               | Entity devices.                              |
@@ -390,8 +390,11 @@ Bind an **entity** and `stateColor` / `activeColor` recolor the whole diagram �
 goes red when its soil sensor says it needs watering, a cabinet highlights while its
 contact sensor is open.
 
-**`goToFloor`** (`up` / `down`) makes clicking the piece change floor — written for the
-`stairs` symbol. See [Stairs that change floor](behavior.md#stairs-that-change-floor).
+**`goToFloor`** makes tapping the piece's icon change floor: `up` / `down` move one
+floor, `top` / `bottom` choose the last / first floor, and `main` uses `defaultFloor`
+(or the first floor if no valid default is set). Use `{ floor: upstairs }` to go
+directly to a floor by id. Available on any furniture symbol; see
+[Stairs that change floor](behavior.md#stairs-that-change-floor).
 
 **`tap_action` / `hold_action` / `double_tap_action`** give a piece the same actions a room
 has (same shape as a device's). `goToFloor` is to furniture what the zoom is to a room: what
