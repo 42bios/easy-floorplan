@@ -8,6 +8,10 @@ A Home Assistant Lovelace card for building an interactive floorplan with a visu
 drag-and-drop editor. Draw walls, place furniture and connect your devices to see
 and control your home in 2D or 3D.
 
+<a href="https://www.buymeacoffee.com/nicosandller" target="_blank">
+  <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" style="height: 60px !important; width: 217px !important;" >
+</a>
+
 [Installation](#installation) · [Your first plan](#create-your-first-plan) · [Documentation](#documentation)
 
 <a name="what-you-can-end-up-with"></a>
@@ -113,10 +117,6 @@ its sample plan and the development workflow.
 Use [Issues](https://github.com/nicosandller/easy-floorplan/issues) to report bugs
 or request features, and [Discussions](https://github.com/nicosandller/easy-floorplan/discussions)
 to ask questions and share your setup.
-
-<a href="https://www.buymeacoffee.com/nicosandller" target="_blank">
-  <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" style="height: 60px !important; width: 217px !important;" >
-</a>
 
 ## License
 
