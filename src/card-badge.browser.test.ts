@@ -125,6 +125,7 @@ describe("a light's brightness badge reads percent, on the card too (issue #359)
   async function mountLight(
     state: { state: string; attributes?: Record<string, unknown> },
     extra?: Partial<FloorItem>,
+    formatAttribute?: (stateObj: unknown, attribute: string) => string,
   ) {
     const host = document.createElement("div");
     host.style.width = "900px";
@@ -164,12 +165,14 @@ describe("a light's brightness badge reads percent, on the card too (issue #359)
       },
       entities: {},
       formatEntityState: (st: { state: string }) => st.state,
+      ...(formatAttribute ? { formatEntityAttributeValue: formatAttribute } : {}),
     } as unknown as FloorplanCard["hass"];
     host.appendChild(card);
     await card.updateComplete;
 
     const root = card.shadowRoot!;
     return {
+      labelText: () => root.querySelector(".label")?.textContent?.trim(),
       badgeValue: () => root.querySelector(".badge .badge-value")?.textContent?.trim(),
       badgeIcon: () => root.querySelector(".badge ha-icon")?.getAttribute("icon") ?? undefined,
     };
@@ -188,6 +191,25 @@ describe("a light's brightness badge reads percent, on the card too (issue #359)
       .toBe("50%");
     expect((await mountLight({ state: "on", attributes: { brightness: 255 } })).badgeValue())
       .toBe("100%");
+  });
+
+  it.each([
+    { brightness: 128, shown: "50%" },
+    { brightness: 101, shown: "40%" },
+  ])("reads the same on the badge as on the label HA words ($brightness)", async ({ brightness, shown }) => {
+    // HA's own formatter words a light's brightness as a percentage; stand in
+    // for it with that rule, as the #260 test stands in for the cover's, and
+    // hold the label and the badge to one text.
+    const t = await mountLight(
+      { state: "on", attributes: { brightness } },
+      undefined,
+      (st, attribute) => {
+        const raw = (st as { attributes: Record<string, unknown> }).attributes[attribute];
+        return attribute === "brightness" ? `${Math.round(((raw as number) / 255) * 100)}%` : "?";
+      },
+    );
+    expect(t.labelText()).toContain(shown);
+    expect(t.badgeValue()).toBe(shown);
   });
 
   it.each([{}, { brightness: null }])("falls back to the icon for an off light with no numeric brightness (%j)", async (attributes) => {
