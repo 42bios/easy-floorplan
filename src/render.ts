@@ -2458,8 +2458,10 @@ const DOMAIN_BADGE_READING: Record<string, { attribute: string; unit: string }> 
  * fit in a circle), so it has to apply the conversion itself: the same reading
  * must not read "50%" in a label and "128" in a badge (issue #359).
  *
- * Only conversions HA itself defines for the domain's attribute, nothing
- * invented here; a `brightness` reading off any other domain stays raw.
+ * Entries are conversions HA itself defines for that domain's attribute,
+ * nothing invented here, but the table covers only what has been added so
+ * far, not every conversion HA defines. A `brightness` reading off any other
+ * domain stays raw.
  */
 const DOMAIN_ATTRIBUTE_BADGE_TEXT: Record<string, Record<string, (n: number) => string>> = {
   light: {
