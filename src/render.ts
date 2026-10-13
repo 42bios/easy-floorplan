@@ -1258,12 +1258,21 @@ export function stripReach(
 /**
  * An LED strip's pool (issue #298): the point lamp's falloff swept along a run.
  *
- * A capsule — a band with a gradient across it, and a half disc at each end
- * with the lamp's own radial gradient — so the light fades the same way at
- * every edge. A row of point pools instead reads as beads, and where
- * screen-blended pools overlap the strip's middle would outshine its ends.
- * The three parts meet without overlapping, so the pool is one light, not
- * three.
+ * A capsule — a band with a gradient across it, and a disc at each end with
+ * the lamp's own radial gradient — so the light fades the same way at every
+ * edge. A row of point pools instead reads as beads, and where screen-blended
+ * pools overlap the strip's middle would outshine its ends.
+ *
+ * The pieces only build the **falloff**, as an opaque grey mask, and the light
+ * itself is one rectangle drawn through it. Painting the pieces translucent and
+ * side by side left a seam at each end (a review on #372): each piece's edge
+ * at the join is anti-aliased on its own, so the backdrop shows through the
+ * shared pixel — a hairline across the whole depth of the pool. Opaque pieces
+ * cover rather than add. The caps go down first, each clipped to its own half
+ * of the run so they do not paint over each other on a short strip, and the
+ * band covers the join last, so at an edge pixel it blends with a cap that
+ * already holds almost the same value. What is left is a fraction of a pixel's
+ * error beside the run line, under the strip's own stroke.
  *
  * One-sided, the band runs from the strip out to its lit side only, and the
  * end caps are quarter discs.
@@ -1293,22 +1302,31 @@ export function renderStripPool(
     pt(x2 + nx * r, y2 + ny * r),
     pt(x1 + nx * r, y1 + ny * r),
   ].join(" ");
-  // The square beyond an end that its cap may fill; (sx, sy) points away.
+  const mx = (x1 + x2) / 2;
+  const my = (y1 + y2) / 2;
+  // An end's half of the plane, from the middle of the run out past its end;
+  // (sx, sy) points away from the strip. Its edge at the middle lies under
+  // the band, which is what keeps it from showing.
   const cap = (ex: number, ey: number, sx: number, sy: number) =>
     [
-      pt(ex - nx * back, ey - ny * back),
-      pt(ex + nx * r, ey + ny * r),
+      pt(mx - nx * back, my - ny * back),
+      pt(mx + nx * r, my + ny * r),
       pt(ex + nx * r + sx * r, ey + ny * r + sy * r),
       pt(ex - nx * back + sx * r, ey - ny * back + sy * r),
     ].join(" ");
-  const mx = (x1 + x2) / 2;
-  const my = (y1 + y2) / 2;
+  // The mask's region and the light's rectangle: the run, r out on every side.
+  const box = {
+    x: round2(Math.min(x1, x2) - r - 1),
+    y: round2(Math.min(y1, y2) - r - 1),
+    w: round2(Math.abs(x2 - x1) + r * 2 + 2),
+    h: round2(Math.abs(y2 - y1) + r * 2 + 2),
+  };
   const clipId = `${gid}-clip`;
   const capGradient = (k: string, ex: number, ey: number) => svg`
     <radialGradient id=${`${gid}-${k}`} gradientUnits="userSpaceOnUse"
                     cx=${ex} cy=${ey} r=${r}>
-      <stop offset="0" stop-color=${color} stop-opacity=${opacity} />
-      <stop offset="1" stop-color=${color} stop-opacity="0" />
+      <stop offset="0" stop-color="#fff" />
+      <stop offset="1" stop-color="#000" />
     </radialGradient>`;
   return svg`
     ${
@@ -1327,20 +1345,25 @@ export function renderStripPool(
                     x2=${round2(mx + nx * r)} y2=${round2(my + ny * r)}>
       ${
         both
-          ? svg`<stop offset="0" stop-color=${color} stop-opacity="0" />
-                <stop offset="0.5" stop-color=${color} stop-opacity=${opacity} />`
-          : svg`<stop offset="0" stop-color=${color} stop-opacity=${opacity} />`
+          ? svg`<stop offset="0" stop-color="#000" />
+                <stop offset="0.5" stop-color="#fff" />`
+          : svg`<stop offset="0" stop-color="#fff" />`
       }
-      <stop offset="1" stop-color=${color} stop-opacity="0" />
+      <stop offset="1" stop-color="#000" />
     </linearGradient>
     ${capGradient("a", x1, y1)}
     ${capGradient("b", x2, y2)}
     <clipPath id=${`${gid}-ca`}><polygon points=${cap(x1, y1, -dx, -dy)} /></clipPath>
     <clipPath id=${`${gid}-cb`}><polygon points=${cap(x2, y2, dx, dy)} /></clipPath>
-    <g class=${cls ?? nothing} clip-path=${reach ? `url(#${clipId})` : nothing}>
-      <polygon points=${band} fill=${`url(#${gid}-run)`} />
+    <mask id=${`${gid}-fall`} maskUnits="userSpaceOnUse"
+          x=${box.x} y=${box.y} width=${box.w} height=${box.h}>
       <circle cx=${x1} cy=${y1} r=${r} fill=${`url(#${gid}-a)`} clip-path=${`url(#${gid}-ca)`} />
       <circle cx=${x2} cy=${y2} r=${r} fill=${`url(#${gid}-b)`} clip-path=${`url(#${gid}-cb)`} />
+      <polygon points=${band} fill=${`url(#${gid}-run)`} />
+    </mask>
+    <g class=${cls ?? nothing} clip-path=${reach ? `url(#${clipId})` : nothing}>
+      <rect x=${box.x} y=${box.y} width=${box.w} height=${box.h}
+            fill=${color} fill-opacity=${opacity} mask=${`url(#${gid}-fall)`} />
     </g>`;
 }
 
@@ -1350,12 +1373,21 @@ export function renderStripPool(
  * it is on, and a dashed one while it is off — the pool is gone then, and the
  * strip should not vanish with it.
  *
+ * A one-sided strip draws just in front of its wall, a wall's width out on its
+ * lit side, rather than down the centreline: there it shows which side it
+ * lights, and the isometric view's standing walls do not bury it (review on
+ * #372) — half a width would put it exactly on the foot of the wall's face.
+ * Only the line moves; the pool is still cast from the run.
+ *
  * `color` is the paint's, already through the allowlist; undefined is off. A
  * style rather than a `stroke` attribute, which the stylesheet's own would beat.
  */
 export function renderStripLine(run: StripRun, color: string | undefined): SVGTemplateResult {
+  const { nx, ny } = stripNormal(run);
+  const off = run.side === "both" ? 0 : WALL_THICKNESS;
   return svg`<line class=${color ? "fp-strip on" : "fp-strip"}
-                   x1=${run.x1} y1=${run.y1} x2=${run.x2} y2=${run.y2}
+                   x1=${round2(run.x1 + nx * off)} y1=${round2(run.y1 + ny * off)}
+                   x2=${round2(run.x2 + nx * off)} y2=${round2(run.y2 + ny * off)}
                    style=${color ? `stroke: ${color}` : nothing} />`;
 }
 

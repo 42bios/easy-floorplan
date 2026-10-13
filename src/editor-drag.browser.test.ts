@@ -1136,7 +1136,7 @@ describe("LED strip ends (issue #298)", () => {
     document.body.innerHTML = "";
   });
 
-  async function mountStrip(extra: Record<string, unknown> = {}) {
+  async function mountStrip(extra: Record<string, unknown> = {}, walls: unknown[] = []) {
     const host = document.createElement("div");
     host.style.width = "900px";
     document.body.appendChild(host);
@@ -1147,6 +1147,7 @@ describe("LED strip ends (issue #298)", () => {
       floors: [
         {
           ...config().floors![0],
+          walls: walls as never,
           items: [
             {
               id: "strip",
@@ -1194,6 +1195,42 @@ describe("LED strip ends (issue #298)", () => {
     expect(it.stripAngle).toBeCloseTo(45, 1);
     // The lit side is the device's, not the drag's.
     expect(it.stripSide).toBe("left");
+  });
+
+  // Review on #372: snapped along a wall, a strip lit on both sides lights
+  // the room behind it too, and `both` is the default.
+  describe("laid onto a wall", () => {
+    const top = [{ id: "n", x1: 100, y1: 100, x2: 900, y2: 100 }];
+    // First end already on the wall at (200, 100); the second out in the
+    // room at (400, 300), so the device starts below the wall.
+    const diagonal = { x: 300, y: 200, stripLength: Math.hypot(200, 200), stripAngle: 45 };
+
+    async function dragSecondEndOntoTheWall(ed: FloorplanCardEditor) {
+      const end = ed.shadowRoot!.querySelectorAll<SVGCircleElement>("circle.handle")[1]!;
+      const from = center(end);
+      // Close enough to level that the wall-style straightening lays it flat.
+      const to = screenPoint(ed.shadowRoot!.querySelector("svg")!, 600, 104);
+      pointer(end, "pointerdown", from.x, from.y);
+      pointer(end, "pointermove", to.x, to.y);
+      await frame();
+      await ed.updateComplete;
+      pointer(end, "pointerup", to.x, to.y);
+      await ed.updateComplete;
+      return (ed as any)._floor().items[0];
+    }
+
+    it("lights the room it was laid out in", async () => {
+      const it = await dragSecondEndOntoTheWall(await mountStrip(diagonal, top));
+      expect(it.y).toBeCloseTo(100, 1);
+      expect(it.stripAngle).toBeCloseTo(0, 1);
+      // Running east, the room below is its right.
+      expect(it.stripSide).toBe("right");
+    });
+
+    it("never overrides a side someone chose", async () => {
+      const it = await dragSecondEndOntoTheWall(await mountStrip({ ...diagonal, stripSide: "both" }, top));
+      expect(it.stripSide).toBe("both");
+    });
   });
 
   it("shows no handles on a pinned strip", async () => {

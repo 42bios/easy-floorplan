@@ -140,25 +140,39 @@ describe("renderStripPool — one light along the run", () => {
   const markup = (side: "both" | "left" | "right") =>
     serialize(renderStripPool(stripRun(strip({ stripSide: side }))!, 100, "#f00", 0.5, "g", undefined, "fp-glow"));
 
-  it("is a band and two end caps, all in the light's colour", () => {
+  it("is one fill in the light's colour, shaped by a falloff mask", () => {
     const out = markup("both");
     expect(out).toContain("<linearGradient id=g-run");
     expect(out).toContain("<radialGradient id=g-a");
     expect(out).toContain("<radialGradient id=g-b");
-    expect(out).toContain("stop-color=#f00");
-    expect(out).toContain('class=fp-glow');
+    expect(out).toContain("<mask id=g-fall");
+    // The colour and strength are on the single rect, not on the pieces —
+    // the pieces are an opaque grey mask, so their joins cannot show (#372).
+    expect(out).toContain("fill=#f00 fill-opacity=0.5 mask=url(#g-fall)");
+    expect(out.match(/fill=#f00/g)).toHaveLength(1);
+    expect(out).not.toContain("stop-opacity");
+    expect(out).toContain("class=fp-glow");
     // No wall in the way: nothing to clip to.
     expect(out).not.toContain("g-clip");
   });
 
+  it("paints the caps first and the band over their join", () => {
+    const out = markup("both");
+    const mask = out.slice(out.indexOf("<mask id=g-fall"));
+    expect(mask.indexOf("url(#g-a)")).toBeLessThan(mask.indexOf("url(#g-run)"));
+    expect(mask.indexOf("url(#g-b)")).toBeLessThan(mask.indexOf("url(#g-run)"));
+    // Each cap keeps to its own half of the run, from the middle (x=500) out.
+    expect(out).toContain("<clipPath id=g-ca><polygon points=500,400 500,200 300,200 300,400");
+  });
+
   it("fades to nothing on both edges of a free strip, from the run on a one-sided one", () => {
     const both = markup("both");
-    expect(both).toContain("<stop offset=\"0\" stop-color=#f00 stop-opacity=\"0\"");
-    expect(both).toContain("<stop offset=\"0.5\" stop-color=#f00 stop-opacity=0.5");
+    expect(both).toContain('<stop offset="0" stop-color="#000"');
+    expect(both).toContain('<stop offset="0.5" stop-color="#fff"');
     // Running east, "left" is up the plan: the band stops at the run (y=300)
     // and reaches to y=200.
     const left = markup("left");
-    expect(left).not.toContain("offset=\"0.5\"");
+    expect(left).not.toContain('offset="0.5"');
     expect(left).toContain("points=400,300 600,300 600,200 400,200");
     expect(markup("right")).toContain("points=400,300 600,300 600,400 400,400");
   });
@@ -188,7 +202,7 @@ describe("a strip through the existing light paths", () => {
       renderSunDimMask([strip()], { "light.strip": on() }, 1000, 600, "dim")
     );
     expect(out).toContain("dim-0-run");
-    expect(out).toContain("stop-color=#000");
+    expect(out).toContain("fill=#000 fill-opacity=1 mask=url(#dim-0-fall)");
   });
 
   it("an off strip casts nothing but still shows where it runs", () => {
@@ -199,6 +213,19 @@ describe("a strip through the existing light paths", () => {
     const lit = serialize(renderStripLine(stripRun(strip())!, "rgb(1, 2, 3)"));
     expect(lit).toContain("fp-strip on");
     expect(lit).toContain("stroke: rgb(1, 2, 3)");
+  });
+});
+
+describe("renderStripLine — where the strip itself is drawn", () => {
+  const line = (side?: "left" | "right") =>
+    serialize(renderStripLine(stripRun(strip({ stripSide: side }))!, undefined)).replace(/\s+/g, " ");
+
+  it("runs down the middle of a free strip, and on its wall's lit face otherwise", () => {
+    expect(line()).toContain("x1=400 y1=300 x2=600 y2=300");
+    // A wall's width (8) out: up the plan for "left" running east…
+    expect(line("left")).toContain("x1=400 y1=292 x2=600 y2=292");
+    // …down it for "right".
+    expect(line("right")).toContain("x1=400 y1=308 x2=600 y2=308");
   });
 });
 

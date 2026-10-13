@@ -5,7 +5,7 @@
 - LED strips (#298): a cast-light device with a `stripLength` casts its light along a
   run instead of from a point, with a `stripSide` for a strip mounted on a wall. Walls
   stop it, the night clears along it, and its ends drag and snap like a wall's in the
-  editor. See [LED strips](docs/configuration.md#led-strips).
+  editor — laid onto a wall, it lights the room it came from. See [LED strips](docs/configuration.md#led-strips).
 - Add a live Line art appearance and optional controls for 2D/3D, appearance,
   quarter-turn rotation and reset. Device states, opening actions and room zoom
   stay interactive. Configure them under Project → Display; new plans include

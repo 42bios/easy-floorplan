@@ -380,11 +380,17 @@ dashed while it is off — so it never reads as a wall.
 A strip mounted on a wall should light only its own room: set `stripSide` to the side the
 room is on. `left` and `right` are as seen walking the strip from its first end (behind
 the device, against `stripAngle`) to its second. `both` is for a strip in free space,
-under a cabinet or along a shelf.
+under a cabinet or along a shelf. A one-sided strip is drawn just in front of its wall on
+the lit side, so the line itself shows which room it lights.
 
 In the editor, turn on **LED strip** under the device's Cast light settings. Its two ends
 get handles on the plan, which drag and snap the way a wall's ends do; the device's icon
-still moves the whole strip. An L-shaped run is two strips bound to the same light.
+still moves the whole strip. Drag both ends onto one wall and, unless you have already
+chosen a side, the strip lights the side it came from — the room you were laying it out
+in. An L-shaped run is two strips bound to the same light.
+
+In the 3D view the strip lies on the floor with its pool, so a standing wall that hides
+that bit of floor hides the strip too.
 
 ## Text
 

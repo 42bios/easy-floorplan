@@ -1425,7 +1425,10 @@ export function itemEffectsForm(
           {
             name: "stripSide",
             label: "Lit side",
-            helper: "Left and right as seen walking the strip from its first end to its second",
+            // The review on #372: the editor is where strips get laid out, so
+            // the warning belongs here and not only in the docs.
+            helper:
+              "On a wall, pick Left or Right or it lights the room behind it too; dragging both ends onto one wall picks for you. Seen from its first end",
             selector: {
               select: {
                 mode: "dropdown",

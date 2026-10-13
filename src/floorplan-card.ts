@@ -1884,16 +1884,16 @@ export class FloorplanCard extends LitElement {
                 )
               )}
             </g>
-            <!-- LED strips (issue #298), above the walls: one snapped onto a
-                 wall runs down its centerline and would be buried under it. -->
-            ${standing
-              ? nothing
-              : active.items.map((it) => {
-                  const run = it.glow ? stripRun(it) : undefined;
-                  return run
-                    ? renderStripLine(run, glowPaint(it, renderHass?.states[it.entity])?.color)
-                    : nothing;
-                })}
+            <!-- LED strips (issue #298), above the flat walls: one snapped
+                 onto a wall would be buried under it. Drawn in the isometric
+                 view too, on the floor where its pool is — an off strip has
+                 no icon of its own to fall back on (review on #372). -->
+            ${active.items.map((it) => {
+              const run = it.glow ? stripRun(it) : undefined;
+              return run
+                ? renderStripLine(run, glowPaint(it, renderHass?.states[it.entity])?.color)
+                : nothing;
+            })}
             ${repeat(
               // Keyed by id: switching floors must create fresh DOM nodes.
               // Unkeyed, Lit morphs floor A's openings into floor B's, and the

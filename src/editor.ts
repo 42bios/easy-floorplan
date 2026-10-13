@@ -166,6 +166,7 @@ import {
   applyDelta,
   areaContainingPoint,
   attachedCorners,
+  stripSideOnWall,
   elementsAtPoint,
   cyclePick,
   findElement,
@@ -305,6 +306,11 @@ interface Drag {
   areaEdge?: number;
   /** Set when dragging one end of an LED strip device (issue #298). */
   stripEnd?: 1 | 2;
+  /**
+   * Whether this strip drag may choose the lit side — only while the device
+   * has none of its own, so a side someone picked is never overridden.
+   */
+  stripAutoSide?: boolean;
   /**
    * Endpoints of *other* walls that coincide with the dragged wall's
    * corner(s) and stretch along with it (issue #30). Hold Alt to detach and
@@ -1800,6 +1806,9 @@ export class FloorplanCardEditor extends LitElement {
       stripEnd,
     };
     if (pick.kind === "wall") this._drag.attached = this._attachedCorners(pick.id, endpoint);
+    if (stripEnd && pick.kind === "item")
+      this._drag.stripAutoSide =
+        this._floor().items.find((i) => i.id === pick.id)?.stripSide === undefined;
     this._gesturePointer = ev.pointerId;
     this._capturePointer(ev);
   }
@@ -1977,10 +1986,21 @@ export class FloorplanCardEditor extends LitElement {
       if (Math.hypot(target.x - fixed.x, target.y - fixed.y) < MIN_STRIP_LENGTH) return;
       // Written end-first, so the strip's first end stays its first and a
       // one-sided strip keeps lighting the same room.
-      const next =
+      const ends =
         drag.stripEnd === 1
-          ? stripFromEnds(target.x, target.y, fixed.x, fixed.y)
-          : stripFromEnds(fixed.x, fixed.y, target.x, target.y);
+          ? ([target.x, target.y, fixed.x, fixed.y] as const)
+          : ([fixed.x, fixed.y, target.x, target.y] as const);
+      const next: Partial<FloorItem> = stripFromEnds(...ends);
+      // Laid onto a wall, a strip lit on both sides would light the room
+      // behind it too: light the side the device was on before the drag.
+      // Re-decided every frame, so dragging it off the wall again undoes it.
+      if (drag.stripAutoSide) {
+        const before = drag.orig.get(`item:${it.id}`);
+        next.stripSide =
+          before?.kind === "pt"
+            ? stripSideOnWall(f.walls, ...ends, before, (x, y) => !!areaContainingPoint(f, x, y))
+            : undefined;
+      }
       this._emitFloor({ items: f.items.map((i) => (i.id === it.id ? { ...i, ...next } : i)) });
       return;
     }
