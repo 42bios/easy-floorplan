@@ -168,6 +168,8 @@ import {
   planProjectionTransform,
   elevationShift,
   wallSolids,
+  openingWallHeight,
+  wallHeadroom,
   furnitureSolid,
   renderIsoSolids,
   FURNITURE_HEIGHT_FRACTION,
@@ -727,6 +729,7 @@ export class FloorplanCard extends LitElement {
     const width = cssNumber(c.width, DEFAULT_WIDTH);
     const height = cssNumber(c.height, DEFAULT_HEIGHT);
     const d = rotatedCanvasSize(width, height, rot);
+    const allWalls = getFloors(c).flatMap((f) => f.walls);
     return {
       w: d.w,
       h: d.h,
@@ -734,8 +737,8 @@ export class FloorplanCard extends LitElement {
       // bounds at every angle. Reserve it before the first turn, not mid-flight.
       orbitSpan: c.showViewControls ? Math.SQRT2 * Math.hypot(width, height) : undefined,
       projection: normalizeProjection(c.view ?? c.projection),
-      wallHeight: normalizeWallHeight(c.wallHeight),
-      padding: 2 + Math.max(WALL_THICKNESS, ...getFloors(c).flatMap((f) => f.walls.map((w) => wallThickness(w.thickness)))),
+      wallHeight: wallHeadroom(c.wallHeight, allWalls),
+      padding: 2 + Math.max(WALL_THICKNESS, ...allWalls.map((w) => wallThickness(w.thickness))),
     };
   }
 
@@ -849,7 +852,7 @@ export class FloorplanCard extends LitElement {
     standingWalls: readonly Wall[],
     c: FloorplanCardConfig,
     rot: number,
-    frame: DisplayFrame,
+    _frame: DisplayFrame,
     rotTransform: string,
     drawFurniture: (f: Furniture) => SVGTemplateResult,
     furnitureTone: (f: Furniture) => string,
@@ -865,7 +868,7 @@ export class FloorplanCard extends LitElement {
     const walls = standingWalls.map((w) => {
       const a = map(w.x1, w.y1);
       const b = map(w.x2, w.y2);
-      return { id: w.id, kind: w.kind, x1: a.x, y1: a.y, x2: b.x, y2: b.y,
+      return { id: w.id, kind: w.kind, height: w.height, x1: a.x, y1: a.y, x2: b.x, y2: b.y,
         thickness: wallThickness(w.thickness) * (isRailing(w) ? RAILING_WEIGHT : 1) };
     });
     const openings = active.openings.map((o) => {
@@ -873,11 +876,13 @@ export class FloorplanCard extends LitElement {
       // The rotation turns directions along with points.
       return { x: p.x, y: p.y, length: o.length, angle: o.angle + rot, type: o.type };
     });
-    const solids = wallSolids(walls, openings, frame.wallHeight, false);
+    const defaultWallHeight = normalizeWallHeight(c.wallHeight);
+    const solids = wallSolids(walls, openings, defaultWallHeight, false);
     for (const o of active.openings) {
-      solids.push(...openingSolids(o, this._travelling(o, this._openingStyle(o, renderHass)), map, frame.wallHeight));
+      const h = openingWallHeight(o, standingWalls, defaultWallHeight);
+      solids.push(...openingSolids(o, this._travelling(o, this._openingStyle(o, renderHass)), map, h));
     }
-    const height = frame.wallHeight * FURNITURE_HEIGHT_FRACTION;
+    const height = defaultWallHeight * FURNITURE_HEIGHT_FRACTION;
     // The glyph is drawn in plan coordinates, so it is lifted by the plan-space
     // shift that reads as "up" once rotated and projected.
     const lift = elevationShift(height, rot);
@@ -1119,7 +1124,7 @@ export class FloorplanCard extends LitElement {
     // Floor-level coordinates would leave the control below the table in 3D.
     const frame = this._frame(c, rot);
     const at = rotatePlanPoint(f.x, f.y, c.width, c.height, rot);
-    const p = projectPlanPoint(at.x, at.y, frame, frame.wallHeight * FURNITURE_HEIGHT_FRACTION);
+    const p = projectPlanPoint(at.x, at.y, frame, normalizeWallHeight(c.wallHeight) * FURNITURE_HEIGHT_FRACTION);
     const d = projectedCanvasSize(frame);
     return html`<div
         class="fp-furniture-link"
@@ -1545,7 +1550,7 @@ export class FloorplanCard extends LitElement {
       : blockingWallSegments;
     // What each opening lets through, for every light that comes in by them —
     // the sun, and after dark the moon.
-    const openingLight: Pick<SunlightOptions, "openAmount" | "shutterOpen" | "drop"> = {
+    const openingLight: Pick<SunlightOptions, "openAmount" | "shutterOpen" | "drop" | "railings"> = {
       // The gap each style actually clears, both leaves included — the same
       // reading the lamps get above, and for the same reason (#145): `entity`
       // alone leaves a door whose *second* panel is open reading as shut, and
@@ -1570,6 +1575,9 @@ export class FloorplanCard extends LitElement {
       // twice and pin every patch under its own skylight at noon. Bounded at
       // the sink, in skylightDropFraction.
       drop: c.skylightDrop,
+      // Where the light comes in over a balcony's edge rather than through
+      // an opening. Kept out of blockingWallSegments, so passed on their own.
+      railings: roomWallSegments.filter((w) => isRailing(w) && !w.divider),
     };
     // The moon (issue #201), where it is at the moment being drawn: the
     // replayed one during replay, so a replayed night shows that night's moon.
