@@ -1,3 +1,4 @@
+import { rotationBasis } from "./rotation";
 import { svg, html, nothing, type SVGTemplateResult, type TemplateResult } from "lit";
 import {
   BUILTIN_SYMBOLS,
@@ -3575,7 +3576,7 @@ export const SHUTTER_MARK_ICON_SIZE = 15;
  */
 export function shutterMarkNormal(
   o: Pick<Opening, "angle" | "flipV">,
-  rot: PlanRotation = 0,
+  rot: number = 0,
 ): { x: number; y: number } {
   const s = o.flipV ? -1 : 1;
   const rad = (o.angle * Math.PI) / 180;
@@ -3584,7 +3585,8 @@ export function shutterMarkNormal(
   if (rot === 90) return { x: -n.y, y: n.x };
   if (rot === 180) return { x: -n.x, y: -n.y };
   if (rot === 270) return { x: n.y, y: -n.x };
-  return n;
+  const { cos, sin } = rotationBasis(rot);
+  return { x: n.x * cos - n.y * sin, y: n.x * sin + n.y * cos };
 }
 
 /**
@@ -3815,7 +3817,7 @@ export function openingMarkPoint(
 
 export function openingMarkNormal(
   o: Pick<Opening, "angle" | "flipV">,
-  rot: PlanRotation = 0,
+  rot: number = 0,
 ): { x: number; y: number } {
   const n = shutterMarkNormal(o, rot);
   return { x: -n.x, y: -n.y };
@@ -4487,13 +4489,14 @@ function switcherCoord(v: unknown): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
-/** Canvas size as displayed: 90°/270° swap width and height. */
+/** Axis-aligned bounds of the rotated plan, including intermediate orbit angles. */
 export function rotatedCanvasSize(
   w: number,
   h: number,
-  rot: PlanRotation
+  rot: number
 ): { w: number; h: number } {
-  return rot === 90 || rot === 270 ? { w: h, h: w } : { w, h };
+  const { cos, sin } = rotationBasis(rot);
+  return { w: Math.abs(cos) * w + Math.abs(sin) * h, h: Math.abs(sin) * w + Math.abs(cos) * h };
 }
 
 /**
@@ -4511,7 +4514,7 @@ export function rotatedCanvasSize(
  * bearing of 0 becomes 90. The result is normalised into 0..360 so callers can
  * hand it straight to CSS.
  */
-export function rotatePlanAngle(angle: number, rot: PlanRotation): number {
+export function rotatePlanAngle(angle: number, rot: number): number {
   const a = cssNumber(angle, 0) + rot;
   return ((a % 360) + 360) % 360;
 }
@@ -4522,7 +4525,7 @@ export function rotatePlanPoint(
   y: number,
   w: number,
   h: number,
-  rot: PlanRotation
+  rot: number
 ): { x: number; y: number } {
   switch (rot) {
     case 90:
@@ -4531,8 +4534,14 @@ export function rotatePlanPoint(
       return { x: w - x, y: h - y };
     case 270:
       return { x: y, y: w - x };
-    default:
+    case 0:
       return { x, y };
+    default: {
+      const { cos, sin } = rotationBasis(rot);
+      const d = rotatedCanvasSize(w, h, rot);
+      return { x: (x - w / 2) * cos - (y - h / 2) * sin + d.w / 2,
+        y: (x - w / 2) * sin + (y - h / 2) * cos + d.h / 2 };
+    }
   }
 }
 
@@ -4542,7 +4551,7 @@ export function rotatePlanPoint(
  * (HTML, remapped per point) and the drawing (SVG, one transform) must land
  * on the same pixels or badges drift off their walls.
  */
-export function planRotationTransform(w: number, h: number, rot: PlanRotation): string {
+export function planRotationTransform(w: number, h: number, rot: number): string {
   switch (rot) {
     case 90:
       return `translate(${h} 0) rotate(90)`;
@@ -4550,8 +4559,12 @@ export function planRotationTransform(w: number, h: number, rot: PlanRotation): 
       return `translate(${w} ${h}) rotate(180)`;
     case 270:
       return `translate(0 ${w}) rotate(-90)`;
-    default:
+    case 0:
       return "";
+    default: {
+      const d = rotatedCanvasSize(w, h, rot);
+      return `translate(${d.w / 2} ${d.h / 2}) rotate(${rot}) translate(${-w / 2} ${-h / 2})`;
+    }
   }
 }
 
@@ -5380,6 +5393,22 @@ function openingEnds(o: Opening): [AreaPoint, AreaPoint] {
 }
 
 /**
+ * A railing as the gap the sun comes in by: an opening spanning it end to end.
+ * Only its position, length and angle are read — it is never asked how far it
+ * is open, since a railing is always clear.
+ */
+function railingGap(w: Wall): Opening {
+  return {
+    id: w.id,
+    type: "window",
+    x: (w.x1 + w.x2) / 2,
+    y: (w.y1 + w.y2) / 2,
+    length: Math.hypot(w.x2 - w.x1, w.y2 - w.y1),
+    angle: (Math.atan2(w.y2 - w.y1, w.x2 - w.x1) * 180) / Math.PI,
+  };
+}
+
+/**
  * Ray-casting point-in-polygon test. Points exactly on an edge may resolve
  * either way (not a documented guarantee) — every caller only needs an
  * approximate "did this land inside" answer, not exact edge semantics.
@@ -5569,6 +5598,15 @@ export interface SunlightOptions {
    * {@link FloorplanCardConfig.skylightDrop} for why it is stated that way.
    */
   drop?: number;
+  /**
+   * The plan's railings. They are not in the `walls` handed to
+   * {@link renderSunlight} — the sun goes over them — but they are where it
+   * comes in: each one admits light along its whole length, as a gap that is
+   * always clear. Without them a balcony behind a railing stayed dark while
+   * the glass door at its back lit the room beyond, the sun having come over
+   * the railing for the door and nowhere else.
+   */
+  railings?: readonly Wall[];
   light?: string;
   /**
    * `null` draws the light without darkening anything else — the patches
@@ -5587,7 +5625,7 @@ export function renderSunlight(
   id: string,
   opts: SunlightOptions,
 ): SVGTemplateResult | typeof nothing {
-  const { dir, openAmount, shutterOpen, strength = 1 } = opts;
+  const { dir, openAmount, shutterOpen, strength = 1, railings = [] } = opts;
   const direct =
     typeof opts.direct === "number" && Number.isFinite(opts.direct)
       ? Math.max(0, Math.min(1, opts.direct))
@@ -5708,6 +5746,53 @@ export function renderSunlight(
   // Each beam keeps the opening it came from: the fade runs from that
   // opening's own centre along the light, so every patch dims over its own
   // length rather than sharing one gradient across the plan.
+  // Railings stand in the way here, and only here. Light that reached a door
+  // over a railing is the railing's beam, carried on through the door's gap —
+  // the door is not a second sun, any more than a doorway behind a window is
+  // (#177 / #178). Counted as a source too, it lit the room beyond twice.
+  const sourceWalls = railings.length ? [...walls, ...railings] : walls;
+  /** The beam through a gap in a wall — an opening's, or a railing's — clear by `f`. */
+  const gapBeam = (
+    o: Opening,
+    ids: { lightId: string; shadeId: string; fadeId: string; shadowMaskId: string; clipId: string },
+    f: number,
+  ) => {
+    if (!sunReachesOpening(o, sourceWalls, dir)) return undefined;
+    // How far the light gets before a wall stops it. The falloff is measured
+    // against this, so a patch is faint by the time it ends however deep or
+    // shallow the room is.
+    const along = sunTravelDistance(o, dir, blockers, reach);
+    // …and how wide it is, measured across the light rather than along the
+    // wall: a gap seen obliquely admits a narrower beam than its own length.
+    const [ga, gb] = openingEnds(o);
+    const gx = gb.x - ga.x;
+    const gy = gb.y - ga.y;
+    const width = Math.abs(gx * dir.y - gy * dir.x) * f;
+    // Half of it, because the gradient below is scaled by *semi*-axes: the
+    // ellipse reaches `across` from the beam's middle, and the beam only has
+    // half its width to give on each side (issue #206).
+    const halfWidth = width / 2;
+    return {
+      ...ids,
+      sky: false,
+      // The outline runs past the falloff, so the ellipse is what bounds the
+      // patch and never the polygon's flat far edge.
+      points: polyPoints(sunBeamPolygon(o, dir, along + o.length, f)),
+      cx: o.x,
+      cy: o.y,
+      along,
+      across: Math.max(1, halfWidth * SUN_ACROSS),
+      angle: (Math.atan2(dir.y, dir.x) * 180) / Math.PI,
+      // A beam has no edge to soften — it fades along its own length — so it
+      // has no second polygon, and no shadow set of its own either: the wall
+      // openings all share the one global shadow mask.
+      haloPoints: "",
+      halo: undefined as undefined | { cx: number; cy: number; angle: number; along: number; across: number },
+      haloLightId: "",
+      haloShadeId: "",
+      shadows: [] as string[],
+    };
+  };
   const beams = openings.map((o, i) => {
     const ids = {
       lightId: `${id}-b${i}`,
@@ -5754,42 +5839,25 @@ export function renderSunlight(
         shadows: downwindShadows(o),
       };
     }
-    if (!sunReachesOpening(o, walls, dir)) return undefined;
-    // How far the light gets before a wall stops it. The falloff is measured
-    // against this, so a patch is faint by the time it ends however deep or
-    // shallow the room is.
-    const along = sunTravelDistance(o, dir, blockers, reach);
-    // …and how wide it is, measured across the light rather than along the
-    // wall: a gap seen obliquely admits a narrower beam than its own length.
-    const [ga, gb] = openingEnds(o);
-    const gx = gb.x - ga.x;
-    const gy = gb.y - ga.y;
-    const width = Math.abs(gx * dir.y - gy * dir.x) * clear(o);
-    // Half of it, because the gradient below is scaled by *semi*-axes: the
-    // ellipse reaches `across` from the beam's middle, and the beam only has
-    // half its width to give on each side (issue #206).
-    const halfWidth = width / 2;
-    return {
-      ...ids,
-      sky: false,
-      // The outline runs past the falloff, so the ellipse is what bounds the
-      // patch and never the polygon's flat far edge.
-      points: polyPoints(sunBeamPolygon(o, dir, along + o.length, f)),
-      cx: o.x,
-      cy: o.y,
-      along,
-      across: Math.max(1, halfWidth * SUN_ACROSS),
-      angle: (Math.atan2(dir.y, dir.x) * 180) / Math.PI,
-      // A beam has no edge to soften — it fades along its own length — so it
-      // has no second polygon, and no shadow set of its own either: the wall
-      // openings all share the one global shadow mask.
-      haloPoints: "",
-      halo: undefined as undefined | { cx: number; cy: number; angle: number; along: number; across: number },
-      haloLightId: "",
-      haloShadeId: "",
-      shadows: [] as string[],
-    };
+    // An opening in a railing adds nothing: the railing's own beam below
+    // already covers its whole length, and a second one over the same gap
+    // drew that stretch of floor twice as bright as the rest of the balcony.
+    if (railings.some((w) => pointWallDist(o.x, o.y, w) <= OPENING_ON_WALL_EPS)) return undefined;
+    return gapBeam(o, ids, f);
   });
+  // The railings after the openings, under ids of their own: numbered in with
+  // the openings, adding a window would renumber every railing's gradient —
+  // the stale-paint-server failure the comment above is about.
+  const railingBeams = railings.map((w, j) =>
+    gapBeam(railingGap(w), {
+      lightId: `${id}-rb${j}`,
+      shadeId: `${id}-rs${j}`,
+      fadeId: `${id}-rf${j}`,
+      shadowMaskId: `${id}-rk${j}`,
+      clipId: `${id}-rc${j}`,
+    }, 1),
+  );
+  beams.push(...railingBeams);
   if (!beams.some((b) => b !== undefined)) return nothing;
   const shadows = shadowPolys.map(polyPoints);
   const pad = WALL_THICKNESS;
@@ -6137,7 +6205,7 @@ export function areaZoomTransform(
   points: readonly AreaPoint[],
   w: number,
   h: number,
-  rot: PlanRotation,
+  rot: number,
   padFrac = 0.15,
   maxScale = MAX_AREA_ZOOM_FIT,
   /**
@@ -6163,10 +6231,26 @@ export function areaZoomTransform(
   const d = projectedCanvasSize(f);
   const xs = rotated.map((p) => p.x);
   const ys = rotated.map((p) => p.y);
-  const minX = Math.min(...xs);
-  const maxX = Math.max(...xs);
-  const minY = Math.min(...ys) - (f.projection === "iso" ? f.wallHeight : 0);
-  const maxY = Math.max(...ys);
+  let minX = Math.min(...xs);
+  let maxX = Math.max(...xs);
+  let minY = Math.min(...ys) - (f.projection === "iso" ? f.wallHeight : 0);
+  let maxY = Math.max(...ys);
+  if (f.projection === "iso" && f.orbitSpan !== undefined) {
+    // Keep a focused room at one scale throughout its orbit, just like the
+    // whole floor. Its enclosing circle fits even at the widest midway angle.
+    const left = Math.min(...points.map((p) => p.x));
+    const right = Math.max(...points.map((p) => p.x));
+    const top = Math.min(...points.map((p) => p.y));
+    const bottom = Math.max(...points.map((p) => p.y));
+    const centre = rotatePlanPoint((left + right) / 2, (top + bottom) / 2, w, h, rot);
+    const at = projectPlanPoint(centre.x, centre.y, f);
+    const bounds = projectedCanvasSize({ ...f, padding: 0,
+      orbitSpan: Math.SQRT2 * Math.hypot(right - left, bottom - top) });
+    minX = at.x - bounds.w / 2;
+    maxX = at.x + bounds.w / 2;
+    minY = at.y - (bounds.h - f.wallHeight) / 2 - f.wallHeight;
+    maxY = at.y + (bounds.h - f.wallHeight) / 2;
+  }
   const pad = Math.max(maxX - minX, maxY - minY) * padFrac;
   const bw = Math.max(maxX - minX + pad * 2, 1);
   const bh = Math.max(maxY - minY + pad * 2, 1);
