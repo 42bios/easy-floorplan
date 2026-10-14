@@ -1104,4 +1104,11 @@ describe("stripSideOnWall (issue #298, review on #372)", () => {
     expect(stripSideOnWall(top, 100, 100, 500, 100, { x: 300, y: 100 }, () => true)).toBeUndefined();
     expect(stripSideOnWall(top, 100, 100, 500, 100, { x: 300, y: 100 })).toBeUndefined();
   });
+
+  it("asks past the face of a thick wall, not inside it", () => {
+    // 24 wide: its faces are 12 out, and the rooms start there.
+    const thick = [{ ...top[0]!, thickness: 24 }];
+    const below = (_x: number, y: number) => y > 112;
+    expect(stripSideOnWall(thick, 100, 100, 500, 100, { x: 300, y: 100 }, below)).toBe("right");
+  });
 });

@@ -581,6 +581,11 @@ describe("itemForm", () => {
     const run = { ...lamp, stripLength: 240, stripAngle: 90, stripSide: "left" } as FloorItem;
     expect(fields(run)).toEqual(expect.arrayContaining(["stripLength", "stripAngle", "stripSide"]));
     expect(itemEffectsForm(run)!.data).toMatchObject({ strip: true, stripLength: 240, stripSide: "left" });
+    // An unset side reads "auto", not "both", and choosing Auto unsets it
+    // again, so a drag may still pick (second review on #372).
+    expect(itemEffectsForm(lamp)!.data.stripSide).toBe("auto");
+    expect(itemEffectsForm(run)!.toPatch({ stripSide: "auto" })).toEqual({ stripSide: undefined });
+    expect(itemEffectsForm(run)!.toPatch({ stripSide: "both" })).toEqual({ stripSide: "both" });
     // Off clears the run, so the device is a point lamp again — not one with
     // a stale length waiting to come back.
     expect(itemEffectsForm(run)!.toPatch({ strip: false })).toEqual({

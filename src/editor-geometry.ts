@@ -3,7 +3,8 @@ import {
   pointInPolygon, 
   polygonCentroid, 
   textLabel, 
-  skylightWidth 
+  skylightWidth,
+  wallThickness
 } from "./render";
 import { 
   AreaPoint, 
@@ -408,9 +409,14 @@ export const STRIP_ON_WALL_EPS = 0.5;
  * itself — a lamp already placed on the wall — falls back to `inRoom`: the
  * side that a room is on, when only one of them has one. A strip off every
  * wall gets no side.
+ *
+ * The rooms are asked just past the wall's face, so the probe reads the
+ * wall's own `thickness` (second review on #372): a fixed distance lands
+ * inside a thick wall, where neither side is a room, and quietly leaves the
+ * strip lit on both.
  */
 export function stripSideOnWall(
-  walls: readonly WallSegment[],
+  walls: readonly (WallSegment & Pick<Wall, "thickness">)[],
   x1: number,
   y1: number,
   x2: number,
@@ -418,7 +424,7 @@ export function stripSideOnWall(
   from: { x: number; y: number },
   inRoom?: (x: number, y: number) => boolean
 ): Exclude<StripSide, "both"> | undefined {
-  const on = walls.some(
+  const on = walls.find(
     (w) => distToWall(x1, y1, w) <= STRIP_ON_WALL_EPS && distToWall(x2, y2, w) <= STRIP_ON_WALL_EPS
   );
   if (!on) return undefined;
@@ -428,12 +434,12 @@ export function stripSideOnWall(
   const side = ((from.x - x1) * (y2 - y1) - (from.y - y1) * (x2 - x1)) / len;
   if (Math.abs(side) > STRIP_ON_WALL_EPS) return side > 0 ? "left" : "right";
   if (!inRoom) return undefined;
-  // Probe just past the wall's face on each side of the strip's middle.
+  // Probe a wall's width past this wall's face, on each side of the middle.
   const nx = (y2 - y1) / len;
   const ny = -(x2 - x1) / len;
   const mx = (x1 + x2) / 2;
   const my = (y1 + y2) / 2;
-  const probe = WALL_THICKNESS * 2;
+  const probe = wallThickness(on.thickness) / 2 + WALL_THICKNESS;
   const left = inRoom(mx + nx * probe, my + ny * probe);
   const right = inRoom(mx - nx * probe, my - ny * probe);
   return left === right ? undefined : left ? "left" : "right";

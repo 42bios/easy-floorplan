@@ -1428,11 +1428,16 @@ export function itemEffectsForm(
             // The review on #372: the editor is where strips get laid out, so
             // the warning belongs here and not only in the docs.
             helper:
-              "On a wall, pick Left or Right or it lights the room behind it too; dragging both ends onto one wall picks for you. Seen from its first end",
+              "On a wall, Left or Right, or it lights the room behind it too. Auto picks one when both ends are dragged onto a wall. Seen from its first end",
             selector: {
               select: {
                 mode: "dropdown",
+                // "Auto" is the unset side, which lights both until a drag lays
+                // the strip onto a wall. It is spelled out rather than shown
+                // as "Both sides", which would read as a choice the editor then
+                // overrides (second review on #372).
                 options: [
+                  { value: "auto", label: "Auto (both until laid on a wall)" },
                   { value: "both", label: "Both sides" },
                   { value: "left", label: "Left" },
                   { value: "right", label: "Right" },
@@ -1457,7 +1462,7 @@ export function itemEffectsForm(
       strip,
       stripLength: it.stripLength ?? DEFAULT_STRIP_LENGTH,
       stripAngle: it.stripAngle ?? 0,
-      stripSide: it.stripSide ?? "both",
+      stripSide: it.stripSide ?? "auto",
     },
     toPatch: (p) => {
       let out = p;
@@ -1470,6 +1475,8 @@ export function itemEffectsForm(
           ? { ...rest, stripLength: strip ? it.stripLength : DEFAULT_STRIP_LENGTH }
           : { ...rest, stripLength: undefined, stripAngle: undefined, stripSide: undefined };
       }
+      // "Auto" is no key at all: the side a drag may still choose.
+      if (out.stripSide === "auto") out = { ...out, stripSide: undefined };
       // "Ripple" is the other half of #127's three-key spelling — same
       // expansion as the badge group's, with the badge mode read off the item.
       if (!("ripple" in out)) return out;

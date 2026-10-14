@@ -387,9 +387,9 @@ the lit side, so the line itself shows which room it lights.
 
 In the editor, turn on **LED strip** under the device's Cast light settings. Its two ends
 get handles on the plan, which drag and snap the way a wall's ends do; the device's icon
-still moves the whole strip. Drag both ends onto one wall and, unless you have already
-chosen a side, the strip lights the side it came from — the room you were laying it out
-in. An L-shaped run is two strips bound to the same light.
+still moves the whole strip. Drag both ends onto one wall and, while **Lit side** is on
+**Auto**, the strip lights the side it came from — the room you were laying it out in.
+Choosing **Both sides** keeps it lit on both, wherever it is dragged. An L-shaped run is two strips bound to the same light.
 
 In the 3D view the strip lies on the floor with its pool, so a standing wall that hides
 that bit of floor hides the strip too.
