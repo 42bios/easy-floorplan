@@ -167,6 +167,7 @@ import {
   elevationShift,
   wallSolids,
   openingWallHeight,
+  wallHeadroom,
   furnitureSolid,
   renderIsoSolids,
   FURNITURE_HEIGHT_FRACTION,
@@ -726,6 +727,7 @@ export class FloorplanCard extends LitElement {
     const width = cssNumber(c.width, DEFAULT_WIDTH);
     const height = cssNumber(c.height, DEFAULT_HEIGHT);
     const d = rotatedCanvasSize(width, height, rot);
+    const allWalls = getFloors(c).flatMap((f) => f.walls);
     return {
       w: d.w,
       h: d.h,
@@ -733,8 +735,8 @@ export class FloorplanCard extends LitElement {
       // bounds at every angle. Reserve it before the first turn, not mid-flight.
       orbitSpan: c.showViewControls ? Math.SQRT2 * Math.hypot(width, height) : undefined,
       projection: normalizeProjection(c.view ?? c.projection),
-      wallHeight: normalizeWallHeight(c.wallHeight),
-      padding: 2 + Math.max(WALL_THICKNESS, ...getFloors(c).flatMap((f) => f.walls.map((w) => wallThickness(w.thickness)))),
+      wallHeight: wallHeadroom(c.wallHeight, allWalls),
+      padding: 2 + Math.max(WALL_THICKNESS, ...allWalls.map((w) => wallThickness(w.thickness))),
     };
   }
 
@@ -848,7 +850,7 @@ export class FloorplanCard extends LitElement {
     standingWalls: readonly Wall[],
     c: FloorplanCardConfig,
     rot: number,
-    frame: DisplayFrame,
+    _frame: DisplayFrame,
     rotTransform: string,
     drawFurniture: (f: Furniture) => SVGTemplateResult,
     furnitureTone: (f: Furniture) => string,
@@ -872,12 +874,13 @@ export class FloorplanCard extends LitElement {
       // The rotation turns directions along with points.
       return { x: p.x, y: p.y, length: o.length, angle: o.angle + rot, type: o.type };
     });
-    const solids = wallSolids(walls, openings, frame.wallHeight, false);
+    const defaultWallHeight = normalizeWallHeight(c.wallHeight);
+    const solids = wallSolids(walls, openings, defaultWallHeight, false);
     for (const o of active.openings) {
-      const h = openingWallHeight(o, standingWalls, frame.wallHeight);
+      const h = openingWallHeight(o, standingWalls, defaultWallHeight);
       solids.push(...openingSolids(o, this._travelling(o, this._openingStyle(o, renderHass)), map, h));
     }
-    const height = frame.wallHeight * FURNITURE_HEIGHT_FRACTION;
+    const height = defaultWallHeight * FURNITURE_HEIGHT_FRACTION;
     // The glyph is drawn in plan coordinates, so it is lifted by the plan-space
     // shift that reads as "up" once rotated and projected.
     const lift = elevationShift(height, rot);
@@ -1119,7 +1122,7 @@ export class FloorplanCard extends LitElement {
     // Floor-level coordinates would leave the control below the table in 3D.
     const frame = this._frame(c, rot);
     const at = rotatePlanPoint(f.x, f.y, c.width, c.height, rot);
-    const p = projectPlanPoint(at.x, at.y, frame, frame.wallHeight * FURNITURE_HEIGHT_FRACTION);
+    const p = projectPlanPoint(at.x, at.y, frame, normalizeWallHeight(c.wallHeight) * FURNITURE_HEIGHT_FRACTION);
     const d = projectedCanvasSize(frame);
     return html`<div
         class="fp-furniture-link"
