@@ -1096,6 +1096,7 @@ export type FurnitureType =
   | "chair"
   | "sofa"
   | "bed"
+  | "bunkBed"
   | "wardrobe"
   | "dresser"
   | "tallDresser"
