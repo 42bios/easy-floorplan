@@ -72,6 +72,11 @@ export interface Wall {
    */
   thickness?: number;
   /**
+   * Per-wall height override in canvas units (0..MAX_WALL_HEIGHT).
+   * When unset, the wall defaults to the card's overall `wallHeight` configuration.
+   */
+  height?: number;
+  /**
    * What the line stands for (issue #182). Unset is a full-height `wall`.
    *
    * A `railing` is the low edge of a balcony, terrace or gallery: it is drawn
@@ -919,6 +924,30 @@ export interface FloorItem {
    * Defaults to {@link DEFAULT_GLOW_COLOR}, a warm white.
    */
   glowColor?: string;
+  /**
+   * Cast the light along a run instead of from a point — an LED strip
+   * (issue #298). The run is centred on the device's `x`/`y`, so the icon sits
+   * at its middle and moving the device moves the whole strip with it.
+   *
+   * A strip is a light with a length rather than an element of its own: entity
+   * binding, colour, brightness, state rules, lock, copy/paste and undo are the
+   * device's and need nothing new. Unset, zero or below {@link MIN_STRIP_LENGTH}
+   * is the ordinary point pool. Only read while `glow` is on.
+   */
+  stripLength?: number;
+  /**
+   * Direction of the run in degrees, measured on the **plan** like
+   * {@link rippleDirection}: 0° runs to the right, 90° straight down. The
+   * strip's *first* end is the one behind the device, its second the one ahead.
+   */
+  stripAngle?: number;
+  /**
+   * Which side of the run it lights. A strip mounted on a wall lights one room,
+   * not both; `"left"` and `"right"` are as seen walking the strip from its
+   * first end to its second. Default `"both"`, for a run in free space — under
+   * a cabinet, along a shelf.
+   */
+  stripSide?: StripSide;
   /** Lovelace actions. Defaults: tap = toggle (controllable domains) or more-info; hold/double = none. */
   tap_action?: ActionConfig;
   hold_action?: ActionConfig;
@@ -932,6 +961,9 @@ export interface FloorItem {
 }
 
 export type ItemDisplay = "badge" | "ripple" | "iconRipple";
+
+/** Which side of its run an LED strip lights — see {@link FloorItem.stripSide}. */
+export type StripSide = "both" | "left" | "right";
 
 /** What a device badge holds — see {@link FloorItem.badgeContent} (issue #106). */
 export type BadgeContent = "icon" | "value" | "none";
@@ -1072,6 +1104,7 @@ export type FurnitureType =
   | "bookcase"
   | "rug"
   | "plant"
+  | "indoorPalm"
   | "fridge"
   | "stove"
   | "sink"
@@ -1121,8 +1154,10 @@ export interface Furniture {
   /** Stroke/fill color. Defaults to gray so it reads differently from walls. */
   color?: string;
   /**
-   * Clicking this changes floor (issue #121) — `up` for the next floor in
-   * `floors`, `down` for the previous one.
+   * Clicking this changes floor (issues #121, #327). `up` / `down` move one
+   * entry in `floors`; `top` / `bottom` choose the last / first entry. `main`
+   * uses `defaultFloor`, falling back to the first floor if it is unset or
+   * missing. `{ floor: "id" }` goes to a specific floor by its stable id.
    *
    * Written for the **stairs** symbol, which is where a plan already draws the
    * thing people expect to click: the arrow on a staircase is a promise that
@@ -1133,10 +1168,10 @@ export interface Furniture {
    * `floors` is read bottom-to-top, so `up` is the next entry and `down` the
    * previous. At the end of the list the direction has nowhere to go: the
    * piece draws as ordinary furniture and takes no clicks, rather than
-   * offering a control that does nothing. It does not wrap — a staircase on
-   * the top floor does not lead to the basement.
+   * offering a control that does nothing. Missing destinations and links to
+   * the current floor are inert too. Up/down do not wrap.
    */
-  goToFloor?: "up" | "down";
+  goToFloor?: "up" | "down" | "top" | "bottom" | "main" | { floor: string };
   /**
    * What a gesture on this piece does (issue #284): "I would like the option to
    * select either a floor or the tap actions like we have for areas."
@@ -1512,6 +1547,13 @@ export const DEFAULT_AREA_BORDER_WIDTH = 3;
 /** Radius of a light's cast pool, in canvas units (issue #6). */
 export const DEFAULT_GLOW_RADIUS = 140;
 /**
+ * Shortest run that draws as a strip (issue #298). Anything shorter is a point
+ * in all but name, and a zero-length run has no direction to light across.
+ */
+export const MIN_STRIP_LENGTH = 4;
+/** What turning a light into a strip starts it at, in canvas units. */
+export const DEFAULT_STRIP_LENGTH = 160;
+/**
  * Warm white, for a light that cannot report a color of its own — as the skin's
  * token (issue #122) so Tron's pools read cyan rather than tungsten, with the
  * original hex as the fallback so an unskinned plan is unchanged.
@@ -1760,6 +1802,12 @@ export interface FloorplanCardConfig extends LovelaceCardConfig {
   projection?: "plan" | "iso";
   /** Display mode. Takes precedence over the prototype `projection` key. */
   view?: "2d" | "3d";
+  /** Default live drawing style. Line art keeps devices and opening states interactive. */
+  appearance?: "normal" | "line-art";
+  /** Offer view, appearance, rotation and reset controls below the live plan. */
+  showViewControls?: boolean;
+  /** Show a button to download static line art of the active floor as SVG. */
+  showExport?: boolean;
   /** Opacity of standing walls, 0..1. Default 1; ignored in 2D. */
   wallOpacity?: number;
   /**
@@ -2076,7 +2124,8 @@ export interface FloorplanCardConfig extends LovelaceCardConfig {
   /** Id of the floor shown first. Falls back to the first floor. */
   defaultFloor?: string;
   /**
-   * Where the floor switcher sits on the plan (issue #281), in canvas units —
+   * Appearance, layout (#353), and position of the floor switcher (#281).
+   * Both coordinates are optional; a position needs both, in canvas units —
    * the point the block of buttons is centred on.
    *
    * If unset, it stays pinned to the plan's top-right corner, which is where it
@@ -2094,7 +2143,14 @@ export interface FloorplanCardConfig extends LovelaceCardConfig {
    * Off-canvas coordinates are honoured rather than clamped — a plan whose
    * walls stop short of the canvas has legitimate empty margin to park it in.
    */
-  floorSwitcher?: { x: number; y: number };
+  floorSwitcher?: {
+    x?: number;
+    y?: number;
+    /** Classic small labels (default), or larger Home Assistant themed buttons. */
+    style?: "default" | "buttons";
+    /** Auto follows compactHeader: horizontal when compact, otherwise vertical. */
+    layout?: "auto" | "horizontal" | "vertical";
+  };
   /** Optional history replay controls and playback defaults. */
   historyReplay?: HistoryReplayConfig;
   walls?: Wall[];
@@ -2314,7 +2370,7 @@ export function emptyConfig(type: string): FloorplanCardConfig {
  * field (issue #192). A new default belongs in new configs.
  */
 export function newPlanConfig(): Partial<FloorplanCardConfig> {
-  return { overlayScale: "plan" };
+  return { overlayScale: "plan", showViewControls: true };
 }
 
 export function uid(prefix: string): string {

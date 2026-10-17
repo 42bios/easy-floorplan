@@ -6,6 +6,7 @@
  * effects (device-class inference, grid/snap rescale).
  */
 import { MAX_FOCUS_INTERVAL, normalizeRoomFocus } from "./room-focus";
+import { normalizeAppearance } from "./line-art";
 import type {
   Area,
   Floor,
@@ -35,6 +36,8 @@ import {
   DEFAULT_ITEM_SIZE,
   DEFAULT_RIPPLE_SIZE,
   DEFAULT_GLOW_RADIUS,
+  DEFAULT_STRIP_LENGTH,
+  MIN_STRIP_LENGTH,
   DEFAULT_TEXT_SIZE,
   DEFAULT_TRACKER_DOT_SIZE,
   DEFAULT_SUN_MIN,
@@ -50,6 +53,7 @@ import {
   badgeContentOf,
   domainIconAnimation,
   entitySupportsGlow,
+  stripRun,
   isRippleEntity,
   normalizeOverlayScale,
   normalizeOverlayMinWidth,
@@ -1340,6 +1344,7 @@ export function itemEffectsForm(
   // of hass, so the control that turns it off does not vanish with it.
   const casts = entitySupportsGlow(entity) || !!it.glow;
   if (!canRipple && !casts) return undefined;
+  const strip = stripRun(it) !== undefined;
   const fields: FormField[] = [];
   if (canRipple) {
     fields.push({
@@ -1395,8 +1400,53 @@ export function itemEffectsForm(
           label: "Light color",
           helper: "Only for bulbs that can't report a color; others use their own",
           selector: { text: {} },
+        },
+        {
+          name: "strip",
+          label: "LED strip",
+          helper: "Casts along a run centred on the device; drag its ends on the plan",
+          selector: { boolean: {} },
         }
       );
+      if (strip) {
+        fields.push(
+          {
+            name: "stripLength",
+            label: "Strip length",
+            selector: { number: { min: MIN_STRIP_LENGTH, max: 2000, step: 1, mode: "box" } },
+          },
+          {
+            name: "stripAngle",
+            label: "Strip direction",
+            selector: {
+              number: { min: 0, max: 360, step: 1, mode: "slider", unit_of_measurement: "°" },
+            },
+          },
+          {
+            name: "stripSide",
+            label: "Lit side",
+            // The review on #372: the editor is where strips get laid out, so
+            // the warning belongs here and not only in the docs.
+            helper:
+              "On a wall, Left or Right, or it lights the room behind it too. Auto picks one when both ends are dragged onto a wall. Seen from its first end",
+            selector: {
+              select: {
+                mode: "dropdown",
+                // "Auto" is the unset side, which lights both until a drag lays
+                // the strip onto a wall. It is spelled out rather than shown
+                // as "Both sides", which would read as a choice the editor then
+                // overrides (second review on #372).
+                options: [
+                  { value: "auto", label: "Auto (both until laid on a wall)" },
+                  { value: "both", label: "Both sides" },
+                  { value: "left", label: "Left" },
+                  { value: "right", label: "Right" },
+                ],
+              },
+            },
+          }
+        );
+      }
     }
   }
   return {
@@ -1409,12 +1459,28 @@ export function itemEffectsForm(
       glow: it.glow ?? false,
       glowRadius: it.glowRadius ?? DEFAULT_GLOW_RADIUS,
       glowColor: it.glowColor ?? "",
+      strip,
+      stripLength: it.stripLength ?? DEFAULT_STRIP_LENGTH,
+      stripAngle: it.stripAngle ?? 0,
+      stripSide: it.stripSide ?? "auto",
     },
-    // "Ripple" is the other half of #127's three-key spelling — same expansion
-    // as the badge group's, with the badge mode read off the item.
     toPatch: (p) => {
-      if (!("ripple" in p)) return p;
-      const { ripple: ring, ...rest } = p;
+      let out = p;
+      // "LED strip" is a length, not a key of its own (issue #298): turning it
+      // on starts the run at a default length along the plan's x axis, and
+      // turning it off clears the run so the device is a point lamp again.
+      if ("strip" in out) {
+        const { strip: on, ...rest } = out;
+        out = on
+          ? { ...rest, stripLength: strip ? it.stripLength : DEFAULT_STRIP_LENGTH }
+          : { ...rest, stripLength: undefined, stripAngle: undefined, stripSide: undefined };
+      }
+      // "Auto" is no key at all: the side a drag may still choose.
+      if (out.stripSide === "auto") out = { ...out, stripSide: undefined };
+      // "Ripple" is the other half of #127's three-key spelling — same
+      // expansion as the badge group's, with the badge mode read off the item.
+      if (!("ripple" in out)) return out;
+      const { ripple: ring, ...rest } = out;
       return { ...rest, ...badgeModePatch(badgeModeOf(it), !!ring) };
     },
   };
@@ -1820,7 +1886,8 @@ export function textForm(t: FloorText, areaScope?: AreaEntityScope): FormSpec {
 export function furnitureForm(
   f: Furniture,
   areaScope?: AreaEntityScope,
-  catalog: SymbolCatalog = BUILTIN_SYMBOLS
+  catalog: SymbolCatalog = BUILTIN_SYMBOLS,
+  floors: readonly Pick<Floor, "id" | "name">[] = [],
 ): FormSpec {
   const choices = furnitureChoices(catalog);
   // A piece whose symbol this install doesn't have keeps its own id in the
@@ -1829,6 +1896,15 @@ export function furnitureForm(
   const options = choices.some((s) => s.id === f.type)
     ? choices.map((s) => ({ value: s.id, label: s.name }))
     : [{ value: f.type, label: `${f.type} (missing)` }, ...choices.map((s) => ({ value: s.id, label: s.name }))];
+  // A prefixed selector value keeps floor ids such as "up" distinct from the
+  // relative destinations. The config stores the explicit target as an object.
+  const namedFloor = f.goToFloor && typeof f.goToFloor === "object" && typeof f.goToFloor.floor === "string"
+    ? f.goToFloor.floor
+    : undefined;
+  const floorOptions = floors.map((floor) => opt(`floor:${floor.id}`, `Go to ${floor.name} (${floor.id})`));
+  if (namedFloor !== undefined && !floors.some((floor) => floor.id === namedFloor)) {
+    floorOptions.push(opt(`floor:${namedFloor}`, `Missing floor: ${namedFloor}`));
+  }
   return {
     fields: [
       {
@@ -1868,8 +1944,12 @@ export function furnitureForm(
       {
         name: "goToFloor",
         label: "Go to floor",
-        helper: "Clicking this piece changes floor — for a staircase",
-        selector: dropdown(opt("", "Nothing"), opt("up", "Up one floor"), opt("down", "Down one floor")),
+        helper: "Tap the icon to change floor. Main uses the default floor, or the first floor",
+        selector: dropdown(
+          opt("", "Nothing"), opt("up", "Up one floor"), opt("down", "Down one floor"),
+          opt("top", "Top floor"), opt("bottom", "Bottom floor"), opt("main", "Main floor"),
+          ...floorOptions,
+        ),
       },
       // Actions on the piece itself (issue #284), offered on every piece the
       // way a room's actions are — furniture with no entity can still navigate or call
@@ -1901,13 +1981,23 @@ export function furnitureForm(
       h: f.h,
       angle: f.angle ?? 0,
       entity: f.entity ?? "",
-      goToFloor: f.goToFloor ?? "",
+      goToFloor: namedFloor !== undefined
+        ? `floor:${namedFloor}`
+        : typeof f.goToFloor === "string" ? f.goToFloor : "",
       tap_action: f.tap_action,
       hold_action: f.hold_action,
       double_tap_action: f.double_tap_action,
     },
-    // "" is the empty option, and means the piece is ordinary furniture.
-    toPatch: (p) => ("goToFloor" in p && !p.goToFloor ? { ...p, goToFloor: undefined } : p),
+    toPatch: (p) => {
+      if (!("goToFloor" in p)) return p;
+      const value = p.goToFloor;
+      return {
+        ...p,
+        goToFloor: typeof value === "string" && value.startsWith("floor:")
+          ? { floor: value.slice("floor:".length) }
+          : value || undefined,
+      };
+    },
   };
 }
 
@@ -2138,6 +2228,14 @@ export function wallForm(w: Wall): FormSpec {
           number: { min: 2, max: MAX_SKIN_WALL_WIDTH, step: 1, mode: "slider", unit_of_measurement: "px" },
         },
       },
+      {
+        name: "height",
+        label: "Height",
+        helper: "Override height for 3D view (leave empty to use default card wall height)",
+        selector: {
+          number: { min: 0, max: MAX_WALL_HEIGHT, step: 1, mode: "slider", unit_of_measurement: "px" },
+        },
+      },
       // Issue #182. A dropdown rather than a switch: a railing is one kind of
       // line that is not a wall, and open-plan dividers are the next one asked
       // about (#288).
@@ -2157,12 +2255,14 @@ export function wallForm(w: Wall): FormSpec {
       x2: Math.round(w.x2),
       y2: Math.round(w.y2),
       thickness: w.thickness ?? WALL_THICKNESS,
+      height: w.height,
       kind: w.kind ?? "wall",
     },
     // Keep the defaults out of the YAML so untouched walls stay terse.
     toPatch: (p) => {
       const out = { ...p };
       if ("thickness" in p && p.thickness === WALL_THICKNESS) out.thickness = undefined;
+      if ("height" in p && (p.height === undefined || p.height === null || typeof p.height !== "number")) out.height = undefined;
       if ("kind" in p) out.kind = p.kind === "railing" ? "railing" : undefined;
       return out;
     },
@@ -2289,6 +2389,21 @@ export function projectDisplayForm(c: FloorplanCardConfig): FormSpec {
         helper: "3D shows standing walls and openings. Editing stays in 2D",
         selector: dropdown(opt("2d", "2D plan"), opt("3d", "3D isometric")),
       },
+      {
+        name: "appearance", label: "Appearance",
+        helper: "Line art uses crisp outlines on white while keeping devices and doors live",
+        selector: dropdown(opt("normal", "Normal"), opt("line-art", "Line art")),
+      },
+      {
+        name: "showViewControls", label: "Show view controls",
+        helper: "Switch 2D/3D, appearance and viewing direction directly on the card",
+        selector: { boolean: {} },
+      },
+      {
+        name: "showExport", label: "Allow SVG download",
+        helper: "Optional download of a static line-art drawing",
+        selector: { boolean: {} },
+      },
       ...(normalizeProjection(c.view ?? c.projection) === "iso" ? [
         {
           name: "wallHeight",
@@ -2405,6 +2520,9 @@ export function projectDisplayForm(c: FloorplanCardConfig): FormSpec {
     ],
     data: {
       view: normalizeProjection(c.view ?? c.projection) === "iso" ? "3d" : "2d",
+      appearance: normalizeAppearance(c.appearance),
+      showViewControls: c.showViewControls ?? false,
+      showExport: c.showExport ?? false,
       wallHeight: normalizeWallHeight(c.wallHeight),
       wallOpacity: normalizeWallOpacity(c.wallOpacity),
       rotation: String(normalizePlanRotation(c.rotation)),

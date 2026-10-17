@@ -41,7 +41,10 @@ quotes when saving while retaining the required quotes around `'y'`.
 | `rotationLandscape` | number | (same as `rotation`) | Rotation to use while the screen is landscape. The mirror of `rotationPortrait`; set either, or both. |
 | `view` | string | `2d` | `3d` shows standing walls, openings and furniture. Display only; the editor stays flat. See [3D view](appearance.md#3d-view). |
 | `projection` | string | `plan` | Prototype alias: `iso` selects 3D when `view` is unset. |
-| `wallHeight` | number | `60` | Standing wall height in canvas units, clamped to 0–400. Ignored in 2D. |
+| `appearance` | string | `normal` | `line-art` draws crisp outlines on white while keeping device states and actions live. See [Live appearance and view controls](appearance.md#live-appearance-and-view-controls). |
+| `showViewControls` | boolean | `false` (enabled for new plans) | Show 2D/3D, Normal/Line art, quarter-turn rotation and reset controls below the plan. Viewer choices stay local to this card. |
+| `showExport` | boolean | `false` | Offer an optional SVG download in the view controls, or an **Export SVG** button when those controls are hidden. Downloads static line art of the active floor in the current view and rotation. See [SVG export](appearance.md#svg-export). |
+| `wallHeight` | number | `60` | Standing wall height in canvas units, clamped to 0–400. Ignored in 2D. Can be overridden per wall via `height`. |
 | `wallOpacity` | number | `1` | Standing wall opacity, clamped to 0–1. Furniture and opening panels keep their own paint. Ignored in 2D. |
 | `showDeadSpaces` | boolean | `false` | Hatch every space the walls seal off that no door or window reaches, worked out from the walls and openings themselves. See [Dead spaces](behavior.md#dead-spaces). |
 | `sunDimming` | boolean | `false` | Dim through dusk, brighten through dawn, from the HA instance's sun. See [Follow the sun](lighting.md#follow-the-sun). |
@@ -59,7 +62,7 @@ quotes when saving while retaining the required quotes around `'y'`.
 | `moonlight` | boolean | `false` | Once the sun is down, let the moon in through the same openings: a cool light from the moon's real position, as bright as it is full. Needs `sunlight` following the real sun. See [Moonlight](lighting.md#moonlight). |
 | `cloudCoverEntity` | string | — | A `weather` entity (its `cloud_coverage`) or a cloud cover sensor in %. Cloud thins the sun patches to a quarter at full cover, keeping the shade, and ambient daylight to 70%; unreadable dims nothing. See [Clouds](lighting.md#clouds). |
 | `skin`       | string   | `default`          | Built-in look for the whole plan: `default`, `odnetnin`, `pastel` or `tron`. See [Skins](appearance.md#skins). |
-| `pressEffect`| string   | `scale`            | Feedback when a device is pressed: `scale`, `ripple`, `flash` or `none`. Only devices that actually do something respond. See [Press feedback](../README.md#press-feedback). |
+| `pressEffect`| string   | `scale`            | Feedback when a device is pressed: `scale`, `ripple`, `flash` or `none`. Only devices that actually do something respond. See [Press feedback](elements.md#press-feedback). |
 | `offlineStyle`| string  | `dim`              | How a device whose entity is **offline** is drawn: `dim`, `strike` (dimmed with a diagonal through the badge) or `none`. See [Offline devices](behavior.md#offline-devices). |
 | `compactHeader`| boolean | `false`           | Draw the title inside the plan and the floor buttons in a row, instead of spending a card header row on them. See [Compact header](appearance.md#compact-header). |
 | `overlayScale`| string  | `fixed`; `plan` in new plans | How badges, labels, room names and text are sized: `plan` = canvas units so they scale with the drawing, `fixed` = screen pixels. A card added from the picker is created with `plan`; a config that doesn't say renders `fixed`, which is what every plan drawn before the option existed was laid out in. See [Overlay scale](appearance.md#overlay-scale). |
@@ -70,7 +73,7 @@ quotes when saving while retaining the required quotes around `'y'`.
 | `palette`    | Palette[]| —                  | Named colours for this plan, referenced from any colour field as `var(--fp-color-<name>)`. See [Named colors](appearance.md#named-colors). |
 | `floors`     | Floor[]  | —                  | Per-floor element groups (see [Floor](#floor)).   |
 | `defaultFloor`| string  | first floor        | Id of the floor shown first.                 |
-| `floorSwitcher` | `{x, y}` | top-right corner | Where the floor buttons sit on the plan, in canvas units — the point the block is centred on. Drag it on the editor canvas. Follows `rotation` like every other anchor. See [Where the floor switcher sits](appearance.md#where-the-floor-switcher-sits). |
+| `floorSwitcher` | object | classic, automatic layout, top-right corner | Optional `style: default` or `buttons` (larger dashboard buttons); `layout: auto`, `horizontal` or `vertical`. Optional `x` and `y` place the centre in canvas units and follow `rotation`. Style and layout work without coordinates. See [Floor button appearance](appearance.md#floor-button-appearance) and [position](appearance.md#where-the-floor-switcher-sits). |
 | `walls`      | Wall[]   | `[]`               | Wall segments (single-floor / floor 1).      |
 | `openings`   | Opening[]| `[]`               | Doors, windows, skylights and passages.      |
 | `items`      | Item[]   | `[]`               | Entity devices.                              |
@@ -172,14 +175,34 @@ walls. Note the card is still stretched into whatever box the dashboard gives it
 `width` / `height` close to the shape it occupies on screen or a `contain` image looks
 distorted anyway.
 
+### Background images on older WebViews
+
+An older WebView can leave a device badge visible while the plan and background
+image disappear because the plan has collapsed to zero width. The card includes
+a width fallback to keep the plan visible when the WebView cannot use its normal
+height-aware sizing.
+
+The comparison below reproduces this layout failure, consistent with the symptoms
+in [issue #339](https://github.com/nicosandller/easy-floorplan/issues/339). It uses
+Chromium with missing CSS support simulated; the cause on the reporter's Android
+device still needs confirmation.
+
+![Before the fallback, the plan collapses and only a badge remains; after the fallback, the background image and badge stay aligned.](img/floor-image-cqh-fallback.jpg)
+
 ## Wall
 
-`{ id, x1, y1, x2, y2, thickness?, kind?, locked? }` — endpoints in virtual units.
+`{ id, x1, y1, x2, y2, thickness?, height?, kind?, locked? }` — endpoints in virtual units.
 
 **`thickness`** is the stroke width in virtual units, set per wall by the **Thickness**
 slider in the editor. It defaults to `8` and is capped at `10`: a doorway is cut through
 the wall layer with a mask sized off the shared default, not per wall, so a wall drawn
 wider than the cap would not be fully cleared by its own door or window.
+
+**`height`** is the standing wall height in canvas units (`0..400`) in 3D isometric view
+(`view: 3d` / `projection: iso`). When unset, the wall defaults to the card's overall
+`wallHeight` setting (default `60`). Openings (doors, windows, passages) placed along the
+wall automatically scale to match its height. Editor: **Height**. See
+[Wall height](appearance.md#wall-height).
 
 **`kind`** is `wall` (the default, never written) or `railing` — the low edge of a
 balcony, terrace or gallery. A railing is drawn at 40% of the wall weight, lamp light and
@@ -228,7 +251,7 @@ See [Skylights](lighting.md#skylights) for what the sun does with one and
 | `tap_action`  | ActionConfig                | Standard Lovelace action, acting on whichever entity `tapTarget` leads with (or on `shutterEntity` when it is the only one bound). By default an open/close `cover` toggles and everything else opens more-info. An action's own `entity` picks which of the two it acts on. |
 | `hold_action` / `double_tap_action` | ActionConfig | With both entities bound, hold opens the shutter's more-info by default — a tap is never retargeted at the shutter motor. Double-tap does nothing unless configured. |
 | `sliderStyle` | `single` \| `bypass` \| `biparting` \| `biparting-bypass` \| `converging` | With `motion: slide`: one panel (default), two stacking, two centre-parting into the walls, two centre-parting over a fixed panel at each jamb, or two running together to stack in the middle. |
-| `locked`      | boolean                     | Pinned in place in the editor: it still selects, edits and deletes, but never moves, and it yields the click to anything unlocked on top of it. The editor writes it; the rendered card ignores it. See [Locking elements in place](../README.md#locking-elements-in-place). |
+| `locked`      | boolean                     | Pinned in place in the editor: it still selects, edits and deletes, but never moves, and it yields the click to anything unlocked on top of it. The editor writes it; the rendered card ignores it. See [Locking elements in place](editor.md#locking-elements-in-place). |
 
 ## Item (device)
 
@@ -246,7 +269,7 @@ See [Skylights](lighting.md#skylights) for what the sun does with one and
 | `name`        | string                                 | friendly name| Label / tooltip override.                             |
 | `size`        | number                                 | `34`         | Icon badge diameter (px).                              |
 | `angle`       | number                                 | `0`          | Icon rotation (deg).                                   |
-| `display`     | `badge` \| `ripple` \| `iconRipple`    | `badge`      | How the device is drawn. The editor spells this as the **Ripple** toggle (plus **Badge shows: Nothing** for `ripple`) and offers it only on devices that detect something where they sit (see [Presence ripples](../README.md#presence-ripples)); in YAML it works on any entity. |
+| `display`     | `badge` \| `ripple` \| `iconRipple`    | `badge`      | How the device is drawn. The editor spells this as the **Ripple** toggle (plus **Badge shows: Nothing** for `ripple`) and offers it only on devices that detect something where they sit (see [Presence ripples](elements.md#presence-ripples)); in YAML it works on any entity. |
 | `iconAnimation` | `auto` \| `none` \| `spin` \| `pulse` | `auto`       | Animate the icon while active. `auto`: fan spins; media player / vacuum pulse. A `climate` entity animates only while its `hvac_action` says it is working — an AC holding `cool` at temperature keeps its colour but stops moving. The editor spells this as the icon options of **Badge shows**, showing `auto` as whatever it resolves to. |
 | `activeColor` | string                                 | theme color  | Badge color while on. Ignored while `stateColor` rules match. |
 | `inactiveColor` | string                               | theme badge  | Badge color while **off** — closed, locked or docked, whichever this entity's domain says. Ignored while `stateColor` rules match, and while the entity is [offline](behavior.md#offline-devices). See [Colors for on and off](behavior.md#colors-for-on-and-off). |
@@ -257,6 +280,9 @@ See [Skylights](lighting.md#skylights) for what the sun does with one and
 | `glow`        | boolean                                | `false`      | Cast a pool of light onto the plan (lights only). See [Cast light](#cast-light). |
 | `glowRadius`  | number                                 | `140`        | Radius of the cast pool at full brightness, in canvas units. A dimmer lamp casts a proportionally smaller pool, down to half this. |
 | `glowColor`   | string                                 | `#ffd9a0`    | Pool color for a bulb that can't report one; color-capable lights use their own. |
+| `stripLength` | number                                 | —            | Cast the light along a run this long, centred on the device, instead of from a point — an LED strip. Under `4` (or unset) is an ordinary point lamp. Only read with `glow`. See [LED strips](#led-strips). |
+| `stripAngle`  | number                                 | `0`          | Direction of the strip in degrees, measured on the plan: `0` runs to the right, `90` straight down. |
+| `stripSide`   | `both` \| `left` \| `right`            | `both`       | Which side of the strip it lights, as seen walking from its first end to its second. `left`/`right` for a strip on a wall, so it lights one room and not both. |
 | `badgeContent` | `icon` \| `value` \| `none`           | `icon`       | What the badge holds. `value` draws the reading inside it, falling back to the icon when there is no number; `none` leaves the label alone. |
 | `badgeEntity` | `primary` \| number                    | automatic    | Which reading a `value` badge shows: the device's own entity, or an index into `readings`. Unset picks the first with a number; set, only that one is read (an index past the end shows the icon). `secondary` is accepted as the legacy spelling of `0`. |
 | `showIcon`    | boolean                                | `true`       | **Deprecated** — use `badgeContent`. Honoured only when it is unset (`false` = `none`). |
@@ -270,7 +296,7 @@ See [Skylights](lighting.md#skylights) for what the sun does with one and
 | `labelSize`   | number                                 | `12`         | Label line font size (px).                             |
 | `tap_action`  | ActionConfig                           | per domain   | Standard Lovelace action. By default `light`, `switch`, `fan` and `input_boolean` toggle and everything else — covers included — opens more-info. |
 | `hold_action` / `double_tap_action` | ActionConfig         | —            | Optional extra gestures.                               |
-| `locked`      | boolean                                | `false`      | Pinned in place in the editor: it still selects, edits and deletes, but never moves, and it yields the click to anything unlocked on top of it. The editor writes it; the rendered card ignores it. See [Locking elements in place](../README.md#locking-elements-in-place). |
+| `locked`      | boolean                                | `false`      | Pinned in place in the editor: it still selects, edits and deletes, but never moves, and it yields the click to anything unlocked on top of it. The editor writes it; the rendered card ignores it. See [Locking elements in place](editor.md#locking-elements-in-place). |
 | `hide*` / `hideBadge*` / `hideState*` | — | — | Twenty-four keys that hide the device, its badge or its label from a second entity's state. Documented in full under [Advanced Hiding Logic](behavior.md#advanced-hiding-logic); the editor groups them under **Visibility**. |
 
 ### Cast light
@@ -279,6 +305,8 @@ Set `glow: true` on a light and it pools its own color and brightness onto the p
 centered where the device sits — not across the whole room. Several lights in one room
 each cast their own pool, and overlapping pools **mix additively**: a warm lamp and a cool
 one blend to a neutral tone between them, the way they would in the room.
+
+<img width="195" height="278" alt="Overlapping pools of colored light blending on a floorplan" src="https://github.com/user-attachments/assets/23104587-687b-4c9a-83e8-e83c3d5eb6eb" />
 
 ```yaml
 items:
@@ -331,6 +359,47 @@ Pools are drawn above room fills but below furniture and walls, so light reads a
 the floor. Furniture under a lit lamp picks up about half the cast, enough to read as lit
 without turning into the color of the light. Pools never intercept clicks.
 
+### LED strips
+
+A strip is a light with a length. Give a cast-light device a `stripLength` and the light
+runs along a line centred on the device instead of pooling from its point — the same
+colour, brightness, state rules and actions as any other light, because it *is* one.
+
+```yaml
+items:
+  - id: kitchen_strip
+    entity: light.kitchen_led_strip
+    kind: light
+    'x': 300
+    'y': 100
+    glow: true
+    glowRadius: 90       # how far the light reaches from the strip
+    stripLength: 400     # the run, centred on x/y
+    stripAngle: 0        # along the plan's x axis
+    stripSide: right     # lights the room below the top wall, not the one above
+```
+
+The glow fades across the strip the way a lamp's fades from its centre, with rounded
+ends, so the run reads as one light rather than a row of beads. Walls stop it exactly as
+they stop a lamp, and the night clears along the run when [sun dimming](lighting.md#lit-rooms-hold-back-the-night)
+is on. The strip itself is drawn as a thin line — in the light's colour while it is on,
+dashed while it is off — so it never reads as a wall.
+
+A strip mounted on a wall should light only its own room: set `stripSide` to the side the
+room is on. `left` and `right` are as seen walking the strip from its first end (behind
+the device, against `stripAngle`) to its second. `both` is for a strip in free space,
+under a cabinet or along a shelf. A one-sided strip is drawn just in front of its wall on
+the lit side, so the line itself shows which room it lights.
+
+In the editor, turn on **LED strip** under the device's Cast light settings. Its two ends
+get handles on the plan, which drag and snap the way a wall's ends do; the device's icon
+still moves the whole strip. Drag both ends onto one wall and, while **Lit side** is on
+**Auto**, the strip lights the side it came from — the room you were laying it out in.
+Choosing **Both sides** keeps it lit on both, wherever it is dragged. An L-shaped run is two strips bound to the same light.
+
+In the 3D view the strip lies on the floor with its pool, so a standing wall that hides
+that bit of floor hides the strip too.
+
 ## Text
 
 `{ id, x, y, text, entity?, attribute?, size?, color?, angle?, locked? }` — `size` px (default 16),
@@ -373,8 +442,11 @@ Bind an **entity** and `stateColor` / `activeColor` recolor the whole diagram �
 goes red when its soil sensor says it needs watering, a cabinet highlights while its
 contact sensor is open.
 
-**`goToFloor`** (`up` / `down`) makes clicking the piece change floor — written for the
-`stairs` symbol. See [Stairs that change floor](behavior.md#stairs-that-change-floor).
+**`goToFloor`** makes tapping the piece's icon change floor: `up` / `down` move one
+floor, `top` / `bottom` choose the last / first floor, and `main` uses `defaultFloor`
+(or the first floor if no valid default is set). Use `{ floor: upstairs }` to go
+directly to a floor by id. Available on any furniture symbol; see
+[Stairs that change floor](behavior.md#stairs-that-change-floor).
 
 **`tap_action` / `hold_action` / `double_tap_action`** give a piece the same actions a room
 has (same shape as a device's). `goToFloor` is to furniture what the zoom is to a room: what

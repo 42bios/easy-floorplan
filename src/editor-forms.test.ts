@@ -33,12 +33,14 @@ import type { FormField } from "./editor-forms";
 import type { Area, FloorText, Opening, FloorItem, Floor, Furniture, Tracker, FloorplanCardConfig } from "./types";
 import {
   DEFAULT_GLOW_RADIUS,
+  DEFAULT_STRIP_LENGTH,
   DEFAULT_PRESS_EFFECT,
   MAX_AREA_ZOOM_FIT,
   DEFAULT_ZOOMED_OVERLAY_SCALE,
 } from "./types";
 import { DEFAULT_SKIN, SKINS, MAX_SKIN_WALL_WIDTH } from "./skins";
 import { DEFAULT_SUN_BEARING, SUN_REACH } from "./render";
+import { MAX_WALL_HEIGHT } from "./projection";
 
 const fields: FormField[] = [
   { name: "name", label: "Name", selector: { text: {} } },
@@ -517,6 +519,7 @@ describe("itemForm", () => {
       "glow",
       "glowRadius",
       "glowColor",
+      "strip",
     ]);
     expect(itemEffectsForm({ ...item, kind: "sensor", entity: "sensor.t" } as FloorItem)).toBeUndefined();
     // …and the Label group is skipped entirely while nothing labels the device.
@@ -566,6 +569,31 @@ describe("itemForm", () => {
     ).toBeUndefined();
     // A pool already turned on stays editable after the entity drops out.
     expect(names(litSwitch)).toContain("glow");
+  });
+
+  it("turns a cast light into an LED strip and back (#298)", () => {
+    const lamp = { ...item, glow: true } as FloorItem;
+    const fields = (it: FloorItem) => itemEffectsForm(it)!.fields.map((f) => f.name);
+    // The run's own settings wait behind the toggle.
+    expect(fields(lamp)).toContain("strip");
+    expect(fields(lamp)).not.toContain("stripLength");
+    expect(itemEffectsForm(lamp)!.toPatch({ strip: true })).toEqual({ stripLength: DEFAULT_STRIP_LENGTH });
+
+    const run = { ...lamp, stripLength: 240, stripAngle: 90, stripSide: "left" } as FloorItem;
+    expect(fields(run)).toEqual(expect.arrayContaining(["stripLength", "stripAngle", "stripSide"]));
+    expect(itemEffectsForm(run)!.data).toMatchObject({ strip: true, stripLength: 240, stripSide: "left" });
+    // An unset side reads "auto", not "both", and choosing Auto unsets it
+    // again, so a drag may still pick (second review on #372).
+    expect(itemEffectsForm(lamp)!.data.stripSide).toBe("auto");
+    expect(itemEffectsForm(run)!.toPatch({ stripSide: "auto" })).toEqual({ stripSide: undefined });
+    expect(itemEffectsForm(run)!.toPatch({ stripSide: "both" })).toEqual({ stripSide: "both" });
+    // Off clears the run, so the device is a point lamp again — not one with
+    // a stale length waiting to come back.
+    expect(itemEffectsForm(run)!.toPatch({ strip: false })).toEqual({
+      stripLength: undefined,
+      stripAngle: undefined,
+      stripSide: undefined,
+    });
   });
 
   it("offers Ripple on detecting devices only, sized behind the toggle (#127, #202)", () => {
@@ -1184,6 +1212,20 @@ describe("wallForm / projectForm / floorImageForm", () => {
     expect((field.selector.number as { max: number }).max).toBe(MAX_SKIN_WALL_WIDTH);
   });
 
+  it("wall reflects a custom height in its data and patches it", () => {
+    const form = wallForm({ id: "w", x1: 0, y1: 0, x2: 1, y2: 1, height: 120 });
+    expect(form.data.height).toBe(120);
+    expect(form.toPatch({ height: 120 })).toEqual({ height: 120 });
+    expect(form.toPatch({ height: undefined })).toEqual({ height: undefined });
+  });
+
+  it("wall's height slider is capped at MAX_WALL_HEIGHT", () => {
+    const field = wallForm({ id: "w", x1: 0, y1: 0, x2: 1, y2: 1 }).fields.find(
+      (f) => f.name === "height"
+    )!;
+    expect((field.selector.number as { max: number }).max).toBe(MAX_WALL_HEIGHT);
+  });
+
   it("project fields are required numbers with min 1", () => {
     const form = projectForm({ type: "t", width: 1000, height: 600 } as FloorplanCardConfig);
     const width = form.fields.find((x) => x.name === "width")!;
@@ -1292,6 +1334,9 @@ describe("wallForm / projectForm / floorImageForm", () => {
     const form = projectDisplayForm({ type: "t", width: 1000, height: 600 } as FloorplanCardConfig);
     expect(form.fields.map((x) => x.name)).toEqual([
       "view",
+      "appearance",
+      "showViewControls",
+      "showExport",
       "rotation",
       "rotationPortrait",
       "rotationLandscape",
@@ -2227,6 +2272,9 @@ describe("every field lands in exactly one panel group", () => {
     // both slices and the control silently disappears.
     const DISPLAY = [
       "view",
+      "appearance",
+      "showViewControls",
+      "showExport",
       "rotation",
       "rotationPortrait",
       "rotationLandscape",

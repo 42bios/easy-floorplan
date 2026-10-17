@@ -138,7 +138,7 @@ describe("editor drag", () => {
     const t = await mountEditor();
     // Zoom until the stage overflows the wrap, so the wrap can scroll. The
     // scroll amount below is the one from #232's review: 150px mid-drag.
-    await t.zoomIn(3);
+    await t.zoomIn(4);
     const scrollable = t.wrap.scrollHeight - t.wrap.clientHeight;
     // If this fails the harness is wrong, not the editor — a canvas that
     // cannot scroll cannot reproduce the bug, and the test would pass vacuously.
@@ -362,12 +362,14 @@ describe("editor drag", () => {
     pointer(corner!, "pointerup", to.x, to.y);
     await ed.updateComplete;
 
-    expect((ed as any)._floor().areas[0].points).toEqual([
-      { x: 70, y: 70 },
-      { x: 200, y: 70 },
-      { x: 200, y: 200 },
-      { x: 70, y: 200 },
-    ]);
+    // The canvas can start at a fractional CSS pixel in the responsive layout.
+    // Inverting its screen matrix must preserve geometry, within float precision.
+    const points = (ed as any)._floor().areas[0].points as { x: number; y: number }[];
+    expect(points).toHaveLength(4);
+    [[70, 70], [200, 70], [200, 200], [70, 200]].forEach(([x, y], i) => {
+      expect(points[i].x).toBeCloseTo(x, 8);
+      expect(points[i].y).toBeCloseTo(y, 8);
+    });
     document.body.innerHTML = "";
   });
 
@@ -1126,5 +1128,115 @@ describe("editor drag", () => {
     expect(neighbor.points[0].x).toBeCloseTo(primary.points[1].x, 6);
     expect(neighbor.points[3].x).toBeCloseTo(primary.points[2].x, 6);
     document.body.innerHTML = "";
+  });
+});
+
+describe("LED strip ends (issue #298)", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  async function mountStrip(extra: Record<string, unknown> = {}, walls: unknown[] = []) {
+    const host = document.createElement("div");
+    host.style.width = "900px";
+    document.body.appendChild(host);
+    const ed = document.createElement("easy-floorplan-card-editor") as FloorplanCardEditor;
+    ed.hass = { states: {}, entities: {} } as unknown as FloorplanCardEditor["hass"];
+    ed.setConfig({
+      ...config(),
+      floors: [
+        {
+          ...config().floors![0],
+          walls: walls as never,
+          items: [
+            {
+              id: "strip",
+              kind: "light",
+              entity: "light.strip",
+              x: 500,
+              y: 300,
+              glow: true,
+              stripLength: 200,
+              stripAngle: 0,
+              ...extra,
+            },
+          ],
+        },
+      ],
+    });
+    host.appendChild(ed);
+    await ed.updateComplete;
+    (ed as any)._selection = [{ kind: "item", id: "strip" }];
+    await ed.updateComplete;
+    return ed;
+  }
+
+  it("drags one end while the other stays put", async () => {
+    const ed = await mountStrip({ stripSide: "left" });
+    const handles = ed.shadowRoot!.querySelectorAll<SVGCircleElement>("circle.handle");
+    expect(handles.length).toBe(2);
+    const end = handles[1]!;
+    const from = center(end);
+    // Off both axes, so the wall-style straightening leaves it alone.
+    const to = screenPoint(ed.shadowRoot!.querySelector("svg")!, 600, 500);
+
+    pointer(end, "pointerdown", from.x, from.y);
+    pointer(end, "pointermove", to.x, to.y);
+    await frame();
+    await ed.updateComplete;
+    pointer(end, "pointerup", to.x, to.y);
+    await ed.updateComplete;
+
+    const it = (ed as any)._floor().items[0];
+    // First end still at (400, 300); the run now ends at (600, 500).
+    expect(it.x).toBeCloseTo(500, 1);
+    expect(it.y).toBeCloseTo(400, 1);
+    expect(it.stripLength).toBeCloseTo(Math.hypot(200, 200), 1);
+    expect(it.stripAngle).toBeCloseTo(45, 1);
+    // The lit side is the device's, not the drag's.
+    expect(it.stripSide).toBe("left");
+  });
+
+  // Review on #372: snapped along a wall, a strip lit on both sides lights
+  // the room behind it too, and `both` is the default.
+  describe("laid onto a wall", () => {
+    const top = [{ id: "n", x1: 100, y1: 100, x2: 900, y2: 100 }];
+    // First end already on the wall at (200, 100); the second out in the
+    // room at (400, 300), so the device starts below the wall.
+    const diagonal = { x: 300, y: 200, stripLength: Math.hypot(200, 200), stripAngle: 45 };
+
+    async function dragSecondEndOntoTheWall(ed: FloorplanCardEditor) {
+      const end = ed.shadowRoot!.querySelectorAll<SVGCircleElement>("circle.handle")[1]!;
+      const from = center(end);
+      // Close enough to level that the wall-style straightening lays it flat.
+      const to = screenPoint(ed.shadowRoot!.querySelector("svg")!, 600, 104);
+      pointer(end, "pointerdown", from.x, from.y);
+      pointer(end, "pointermove", to.x, to.y);
+      await frame();
+      await ed.updateComplete;
+      pointer(end, "pointerup", to.x, to.y);
+      await ed.updateComplete;
+      return (ed as any)._floor().items[0];
+    }
+
+    it("lights the room it was laid out in", async () => {
+      const it = await dragSecondEndOntoTheWall(await mountStrip(diagonal, top));
+      expect(it.y).toBeCloseTo(100, 1);
+      expect(it.stripAngle).toBeCloseTo(0, 1);
+      // Running east, the room below is its right.
+      expect(it.stripSide).toBe("right");
+    });
+
+    it("never overrides a side someone chose", async () => {
+      const it = await dragSecondEndOntoTheWall(await mountStrip({ ...diagonal, stripSide: "both" }, top));
+      expect(it.stripSide).toBe("both");
+    });
+  });
+
+  it("shows no handles on a pinned strip", async () => {
+    const ed = await mountStrip({ locked: true });
+    expect(ed.shadowRoot!.querySelectorAll("circle.handle").length).toBe(0);
+    // …but still draws where it runs.
+    expect(ed.shadowRoot!.querySelector("line.fp-strip")).toBeTruthy();
   });
 });

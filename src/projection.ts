@@ -26,10 +26,11 @@
  * separation and visible-face depth decide the order of overlapping solids.
  */
 import { svg, nothing, type SVGTemplateResult } from "lit";
+import { rotationBasis } from "./rotation";
 import { cssNumber, cssIdent } from "./css-safe";
-import type { WallKind } from "./types";
+import type { WallKind, Wall, OpeningType } from "./types";
 import { OPENING_ON_WALL_EPS } from "./dead-space";
-import { openingIsSkylight, type OpeningType } from "./types";
+import { openingIsSkylight } from "./types";
 import { joinIsoWalls } from "./projection-joints";
 import { sortIsoSolids } from "./projection-order";
 
@@ -76,9 +77,31 @@ export function normalizeProjection(v: unknown): PlanProjection {
   return v === "iso" || v === "3d" ? "iso" : "plan";
 }
 
-/** Coerce a config `wallHeight` to `0..MAX_WALL_HEIGHT`, defaulting when unset or not a number. */
-export function normalizeWallHeight(v: unknown): number {
-  return Math.min(MAX_WALL_HEIGHT, Math.max(0, cssNumber(v, DEFAULT_WALL_HEIGHT)));
+/** Coerce a config `wallHeight` or per-wall height override to `0..MAX_WALL_HEIGHT`, defaulting when unset or not a number. */
+export function normalizeWallHeight(v: unknown, fallback = DEFAULT_WALL_HEIGHT): number {
+  return Math.min(MAX_WALL_HEIGHT, Math.max(0, cssNumber(v, fallback)));
+}
+
+/**
+ * Resolves the effective standing height of a wall, taking into account any custom
+ * height override (normalized), railing fraction, and falling back to baseWallHeight.
+ */
+export function wallStandingHeight(w: { height?: number; kind?: WallKind }, baseWallHeight: number): number {
+  const normBase = normalizeWallHeight(baseWallHeight);
+  const base = normalizeWallHeight(w.height, normBase);
+  return base * (w.kind === "railing" ? RAILING_HEIGHT_FRACTION : 1);
+}
+
+/**
+ * Calculates the required 3D headroom from the card's base wall height and
+ * any per-wall height overrides across all walls, ensuring tall walls fit the canvas.
+ */
+export function wallHeadroom(
+  baseWallHeight: unknown,
+  walls: readonly { height?: number; kind?: WallKind }[]
+): number {
+  const base = normalizeWallHeight(baseWallHeight);
+  return Math.max(base, ...walls.map((w) => wallStandingHeight(w, base)));
 }
 
 /** Wall opacity is independent of glass and furniture. */
@@ -101,6 +124,8 @@ export interface DisplayFrame {
   wallHeight: number;
   /** Screen-space margin for wall caps at the canvas boundary. */
   padding?: number;
+  /** Fixed floor span for live orbit controls; fits the full rotation without zoom pulsing. */
+  orbitSpan?: number;
 }
 
 /**
@@ -110,7 +135,8 @@ export interface DisplayFrame {
  */
 export function projectedCanvasSize(f: DisplayFrame): { w: number; h: number } {
   if (f.projection !== "iso") return { w: f.w, h: f.h };
-  return { w: (f.w + f.h) * ISO_COS + 2 * (f.padding ?? 0), h: (f.w + f.h) * ISO_SIN + f.wallHeight + 2 * (f.padding ?? 0) };
+  const span = f.orbitSpan ?? f.w + f.h;
+  return { w: span * ISO_COS + 2 * (f.padding ?? 0), h: span * ISO_SIN + f.wallHeight + 2 * (f.padding ?? 0) };
 }
 
 /**
@@ -120,9 +146,10 @@ export function projectedCanvasSize(f: DisplayFrame): { w: number; h: number } {
  */
 export function projectPlanPoint(x: number, y: number, f: DisplayFrame, z = 0): Pt {
   if (f.projection !== "iso") return { x, y };
+  const margin = ((f.orbitSpan ?? f.w + f.h) - f.w - f.h) / 2;
   return {
-    x: (x - y) * ISO_COS + f.h * ISO_COS + (f.padding ?? 0),
-    y: (x + y) * ISO_SIN + f.wallHeight - z + (f.padding ?? 0),
+    x: (x - y) * ISO_COS + (f.h + margin) * ISO_COS + (f.padding ?? 0),
+    y: (x + y + margin) * ISO_SIN + f.wallHeight - z + (f.padding ?? 0),
   };
 }
 
@@ -148,7 +175,8 @@ export function projectPlanDirection(dx: number, dy: number, f: DisplayFrame): P
 export function planProjectionTransform(f: DisplayFrame): string {
   if (f.projection !== "iso") return "";
   const n = (v: number) => String(+v.toFixed(6));
-  return `matrix(${n(ISO_COS)} ${n(ISO_SIN)} ${n(-ISO_COS)} ${n(ISO_SIN)} ${n(f.h * ISO_COS + (f.padding ?? 0))} ${n(f.wallHeight + (f.padding ?? 0))})`;
+  const origin = projectPlanPoint(0, 0, f);
+  return `matrix(${n(ISO_COS)} ${n(ISO_SIN)} ${n(-ISO_COS)} ${n(ISO_SIN)} ${n(origin.x)} ${n(origin.y)})`;
 }
 
 /**
@@ -173,8 +201,10 @@ export function elevationShift(z: number, rot: number): Pt {
       return { x: z, y: z };
     case 270:
       return { x: z, y: -z };
-    default:
-      return { x: -z, y: -z };
+    default: {
+      const { cos, sin } = rotationBasis(rot);
+      return { x: -z * (cos + sin), y: z * (sin - cos) };
+    }
   }
 }
 
@@ -206,6 +236,7 @@ export interface IsoSolid {
 export interface IsoWallInput {
   id: string;
   kind?: WallKind;
+  height?: number;
   x1: number;
   y1: number;
   x2: number;
@@ -225,6 +256,58 @@ interface Span {
   s0: number;
   s1: number;
   type: "door" | "window";
+}
+
+/**
+ * Find the wall an opening is placed on, if any.
+ * Matches using the same distance and parallel tolerances as openingSpans and dead-space.
+ * When multiple collinear walls match (e.g. at a junction), the one with the greatest
+ * opening overlap is chosen.
+ */
+export function openingWall<W extends { x1: number; y1: number; x2: number; y2: number }>(
+  o: { x: number; y: number; length: number; angle: number; type?: OpeningType },
+  walls: readonly W[]
+): W | undefined {
+  if (o.type === "skylight") return undefined;
+  const rad = (o.angle * Math.PI) / 180;
+  let bestWall: W | undefined;
+  let bestOverlap = -Infinity;
+  for (const w of walls) {
+    const dx = w.x2 - w.x1;
+    const dy = w.y2 - w.y1;
+    const len = Math.hypot(dx, dy);
+    if (!(len > 1e-6)) continue;
+    const d = { x: dx / len, y: dy / len };
+    const cross = Math.abs(d.x * Math.sin(rad) - d.y * Math.cos(rad));
+    if (cross > PARALLEL_EPS) continue;
+    const rx = o.x - w.x1;
+    const ry = o.y - w.y1;
+    const t = rx * d.x + ry * d.y;
+    if (t < -o.length / 2 || t > len + o.length / 2) continue;
+    const off = Math.abs(rx * -d.y + ry * d.x);
+    if (off <= OPENING_ON_WALL_EPS) {
+      const overlap = Math.min(len, t + o.length / 2) - Math.max(0, t - o.length / 2);
+      if (overlap > bestOverlap) {
+        bestOverlap = overlap;
+        bestWall = w;
+      }
+    }
+  }
+  return bestWall;
+}
+
+/**
+ * Height an opening should stand in 3D projection: inherited from its underlying wall
+ * when placed on one with custom height (or a railing), or defaulting to wallHeight.
+ */
+export function openingWallHeight(
+  o: { x: number; y: number; length: number; angle: number; type?: OpeningType },
+  walls: readonly (Wall | IsoWallInput)[],
+  defaultWallHeight: number
+): number {
+  const normDefault = normalizeWallHeight(defaultWallHeight);
+  const w = openingWall(o, walls);
+  return w ? wallStandingHeight(w, normDefault) : normDefault;
 }
 
 /** The openings that sit on this wall, as spans along it, clipped and in order. */
@@ -282,6 +365,7 @@ export function wallSolids(
   wallHeight: number,
   includeGlass = true
 ): IsoSolid[] {
+  const normWallHeight = normalizeWallHeight(wallHeight);
   const out: IsoSolid[] = [];
   const joined = joinIsoWalls(walls, (w, start) => {
     const len = Math.hypot(w.x2 - w.x1, w.y2 - w.y1);
@@ -295,7 +379,7 @@ export function wallSolids(
     const dy = w.y2 - w.y1;
     const len = Math.hypot(dx, dy);
     if (!(len > 1e-6)) continue;
-    const height = wallHeight * (w.kind === "railing" ? RAILING_HEIGHT_FRACTION : 1);
+    const height = wallStandingHeight(w, normWallHeight);
     const kind = w.kind === "railing" ? "railing" : "wall";
     const d = { x: dx / len, y: dy / len };
     const n = { x: -d.y, y: d.x };
@@ -312,18 +396,19 @@ export function wallSolids(
         endEdges: end.slice(1).map((_p, i) => i + 1),
         startEdges: start.slice(1).map((_p, i) => end.length + 1 + i) };
     };
-    const pieces = (s0: number, s1: number, z1: number, kind: IsoSolidKind) => {
+    const pieces = (s0: number, s1: number, z1: number, kind: IsoSolidKind, z0 = 0) => {
       const count = Math.max(1, Math.ceil((s1 - s0) / ISO_CHUNK));
       const step = (s1 - s0) / count;
       for (let i = 0; i < count; i++) {
         const shape = box(s0 + step * i, s0 + step * (i + 1));
-        out.push({ kind, id: w.id, base: shape.base, z0: 0, z1,
+        out.push({ kind, id: w.id, base: shape.base, z0, z1,
           hiddenEdges: [...(i < count - 1 || (s1 >= len && w.end) ? shape.endEdges : []),
             ...(i > 0 || (s0 <= 0 && w.start) ? shape.startEdges : [])] });
       }
     };
     const spans = openingSpans(w, openings, d, len);
     let cursor = 0;
+    const hasHeader = w.kind !== "railing" && height > DEFAULT_WALL_HEIGHT;
     for (const s of spans) {
       // Solid wall up to this opening. The cap only at the wall's real end.
       if (s.s0 > cursor) pieces(cursor === 0 ? -half : cursor, s.s0, height, kind);
@@ -336,6 +421,12 @@ export function wallSolids(
           z0: height * SILL_FRACTION,
           z1: height * GLASS_FRACTION,
         });
+      }
+      if (hasHeader) {
+        const openingTop = height * GLASS_FRACTION;
+        if (height > openingTop + 1e-4) {
+          pieces(s.s0, s.s1, height, kind, openingTop);
+        }
       }
       cursor = s.s1;
     }

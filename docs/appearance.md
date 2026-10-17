@@ -21,6 +21,10 @@ skin: tron
 | `pastel` | Soft and low-contrast: muted mauve walls on blush paper, peach for active devices. Easy on a dashboard that stays on screen. |
 | `tron` | Neon on near-black: thin glowing cyan walls, amber for active devices, light text. Light pools read best here. |
 
+<img width="300" height="300" alt="Default skin" src="https://github.com/user-attachments/assets/ce2d6545-10f4-4aa2-bbd7-0dcae08c27f5" />
+<img width="300" height="300" alt="Odnetnin skin" src="https://github.com/user-attachments/assets/1d46f7a3-b894-4fcb-bdb9-a55270b8e4e4" />
+<img width="300" height="300" alt="Tron skin" src="https://github.com/user-attachments/assets/de5b0825-3bff-4817-8a26-8f887bab8c48" />
+
 A skin only supplies **fallbacks**, so anything you set on an element yourself still wins —
 a room's own `color`, a device's `activeColor`, a `background` on the plan. Switch skins
 freely without losing colors you chose by hand.
@@ -303,6 +307,11 @@ between the sun and the balcony door behind it, so no sunlight ever came in that
 Set a wall's **Kind** to **Railing** and it is drawn thin, and light carries on over it —
 a lamp's pool spills past the edge, and the sun reaches the door again.
 
+The sun comes in over the whole length of a railing, so it lights the balcony floor and
+not only the door behind it. A glazed or open door carries that same light on into the
+room; it does not add a second patch of its own. A window or door in the railing adds
+none either, as the railing already lets the light through there.
+
 ![Before and after: a lamp pool clipped at the balcony edge, then spilling over a thin railing with sunlight entering the balcony door](img/balcony-railing.png)
 
 ```yaml
@@ -316,6 +325,87 @@ A railing also seals off no [dead space](behavior.md#dead-spaces): whatever it e
 open to the air. It still takes doors and windows the way a wall does — a gate in a
 railing is a door — and an explicit **Thickness** is scaled down with it, so a railing
 stays thinner than the walls beside it.
+
+## Floor button appearance
+
+Choose **Project → Floor switcher → Style → Dashboard buttons** for larger floor
+buttons that use Home Assistant's theme colours and card radius. **Layout** chooses a
+horizontal row or vertical column independently of the compact header. Automatic keeps
+the existing behaviour: a column normally, a row with `compactHeader: true`.
+
+![The same floorplan with classic floor labels and dashboard buttons](../assets/issue-353/comparison.jpg)
+
+```yaml
+type: custom:easy-floorplan-card
+floorSwitcher:
+  style: buttons
+  layout: horizontal
+  'x': 200
+  'y': 152
+```
+
+Omit `x` and `y` to keep the top-right position. Classic (`style: default`) keeps the
+small labels and plan skin colours; Dashboard buttons use the dashboard theme even when
+the plan has a different skin. Both styles use each floor's existing `short` label and
+active `color`. The full name remains available as the tooltip and accessible name, and
+the selected floor is announced as pressed. Horizontal rows wrap on narrow cards.
+Moving the switcher or choosing **Back to the corner** preserves its style and layout.
+See the [phone and native editor checks](../assets/issue-353/README.md) for examples.
+
+For a custom look, set the switcher variables through your theme or
+[card-mod](https://github.com/thomasloven/lovelace-card-mod). They affect only floor
+buttons, leaving device badges and the rest of the plan's skin alone:
+
+```yaml
+card_mod:
+  style: |
+    ha-card {
+      --fp-floor-switcher-background: var(--secondary-background-color);
+      --fp-floor-switcher-color: var(--primary-text-color);
+      --fp-floor-switcher-active-background: #00695c;
+      --fp-floor-switcher-active-color: white;
+      --fp-floor-switcher-border-radius: 24px;
+      --fp-floor-switcher-border-width: 0px;
+      --fp-floor-switcher-padding: 12px 20px;
+      --fp-floor-switcher-gap: 8px;
+      --fp-floor-switcher-box-shadow: none;
+    }
+```
+
+All variables below start with `--fp-floor-switcher-`. Unset values come from the
+selected preset; explicit values override the preset and per-floor active colour.
+
+| Suffix | Controls |
+| --- | --- |
+| `background`, `color`, `border-color` | Resting button colours |
+| `active-background`, `active-color`, `active-border-color` | Selected button colours; active border defaults to the active background |
+| `border-width`, `border-radius`, `box-shadow` | Outline, corners and shadow |
+| `padding`, `gap` | Space inside and between buttons |
+| `font-size`, `font-weight` | Label typography |
+| `min-height`, `max-width` | Button dimensions; dashboard buttons default to at least 44px high, both styles limit labels to 120px wide |
+
+For CSS beyond these variables, card-mod can target `.floor-switcher`, `.floor-button`,
+`.floor-button.active`, or `[data-floor-id="your-floor-id"]`. For example:
+
+```yaml
+card_mod:
+  style: |
+    .floor-switcher .floor-button {
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .floor-switcher [data-floor-id="ground"].active {
+      background: linear-gradient(120deg, #00695c, #0277bd);
+      color: white;
+      border-color: transparent;
+    }
+```
+
+The card also exposes CSS parts `floor-switcher`, `floor-button` and
+`floor-button-active` for stylesheets outside its shadow root, for example
+`easy-floorplan-card::part(floor-button) { border-radius: 0; }`. These are styling hooks
+for the built-in floor controls; they do not embed other Lovelace cards. One-floor plans
+still have no switcher.
 
 ## Where the floor switcher sits
 
@@ -539,6 +629,97 @@ was rotated (issue #280).
 
 <a id="isometric-view"></a>
 
+## Live appearance and view controls
+
+Choose **Project → Display → Appearance → Line art** for a live architectural
+drawing of your existing plan. Enable **Show view controls** in the same group
+to give viewers these controls directly on the card:
+
+- **2D / 3D** changes the projection.
+- **Normal / Line art** changes the drawing style.
+- **Rotate left / right** turns through the four viewing directions in 90° steps.
+  In 3D the house moves smoothly around its centre; in 2D it switches immediately.
+- **Reset view** returns to the saved view, appearance and rotation and zooms out.
+
+![Live line art with view controls and simulated devices](img/line-art-live-desktop.png)
+
+The same controls [wrap on a narrow screen](img/line-art-live-mobile.png).
+
+The controls are enabled for new plans; existing plans can opt in without changing
+their saved layout. Choose the initial appearance and view in the editor:
+
+```yaml
+view: 3d
+appearance: line-art
+showViewControls: true
+```
+
+Line art keeps entity readings, device actions, animated opening positions,
+furniture actions, floor switching and room zoom live. Light pools and state
+colours still show what is happening at home. The canvas uses white surfaces and
+dark outlines; standing walls become opaque and background images turn grayscale.
+Environmental sunlight, moonlight and night dimming pause while Line art is
+selected. **Normal** restores your configured colours, skin, opacity and lighting.
+
+View choices last while the card is mounted, including through entity updates
+and floor changes. They do not modify the saved configuration. Changing a saved
+default in the editor replaces the corresponding temporary choice; reloading the
+card also restores its defaults. Reset keeps the active floor selected. The 3D
+view uses the existing isometric renderer and four viewing corners, with no free
+orbit camera.
+
+A 3D quarter-turn takes about half a second. Click again to keep turning or
+reverse direction; the next movement starts from the current position. Labels
+stay upright, device and opening actions follow the drawing, and a focused room
+stays selected. The angle beside the buttons is the destination. Reset cancels
+an unfinished turn and restores the saved defaults.
+
+With view controls enabled, 3D reserves enough space for every intermediate
+angle, including when a room is focused. Long, narrow plans can therefore look
+slightly smaller than a fixed-corner view, but keep the same scale while turning.
+The system's **Reduce motion** preference makes turns instantaneous; changing it
+mid-turn immediately settles the view. Switching to 2D or changing the screen's
+orientation also settles an unfinished turn.
+
+![A smooth 90-degree turn with simulated entities](../assets/issue-354/rotation-after.gif)
+
+The toolbar follows the Home Assistant theme, wraps for narrow cards, and supports
+keyboard focus and touch. Try the [live preview](../docker/README.md#live-appearance-preview)
+with simulated lights, doors and both themes.
+
+## SVG export
+
+Enable **Project → Display → Allow SVG download**, or add `showExport: true`, for
+an optional download button at the end of the view controls. Without view controls,
+it appears as **Export SVG** below the plan. Select a floor, then download it.
+The download uses the current 2D or 3D view and the selected destination rotation
+(even while a turn is still moving), including orientation overrides. It always includes the full canvas, even while
+zoomed into a room. Open the SVG directly in a browser, print it, or insert it into
+a document or vector editor.
+
+![Downloaded 3D line-art example](img/line-art-example.svg)
+
+```yaml
+showExport: true
+view: 3d
+wallHeight: 60
+```
+
+The file uses the live Line art's dark ink on white for walls, openings, furniture
+(including custom symbols), dividers and room names. It needs no Home Assistant connection, theme,
+external fonts or linked images. Openings use their static drawing convention:
+swing doors open and windows closed, respecting the configured inversion.
+Background images, free text, device badges, entity readings, lighting
+and replay state are omitted. The live card is unchanged by exporting.
+
+Standing faces are opaque and use the existing 3D painter's ordering to cover
+geometry behind them. This is an illustration in canvas units, not a survey or
+a general hidden-line CAD export. White faces and SVG masks remain in the file;
+it is intended for printing and documents, not optimised pen-plotter paths.
+
+Try the [local live preview](../docker/README.md#live-appearance-preview) to switch
+views and floors and download the example drawing.
+
 ## 3D view
 
 Choose **Project → Display → View → 3D isometric** to see the plan from a corner.
@@ -577,8 +758,9 @@ selecting a view in the editor removes the old alias.
   tops, and the canvas includes a margin for wall caps at its edges.
 - Lower **Wall height** or **Wall opacity** to reveal more of a room. Everything
   standing in the wall plane fades together, doors and shutters included, while
-  glass keeps its own tint and furniture stays solid inside the room. Height remains
-  a fixed 60 canvas units by default while we experiment with different plan sizes.
+  glass keeps its own tint and furniture stays solid inside the room. Height is
+  60 canvas units by default, and can be customized globally (`wallHeight`) or
+  overridden on individual walls (`height`).
   Zero height lays the flat plan on an isometric floor: walls, furniture and opening
   symbols drawn exactly as the 2D view draws them.
 
@@ -609,6 +791,25 @@ Very acute wall joins are bevelled to avoid long spikes; their caps can still
 overlap and show a faint darker patch when walls are translucent.
 Furniture still uses a shared height. Pin-shaped device markers and per-symbol
 heights are also follow-ups.
+
+### Wall height
+
+Individual walls can override the card's global `wallHeight` with their own `height` property
+(from `0` to `400` canvas units):
+
+```yaml
+walls:
+  - id: wall_bar
+    x1: 100
+    y1: 150
+    x2: 180
+    y2: 150
+    height: 30 # half-wall / counter
+```
+
+Select any wall in the editor to adjust the **Height** slider under wall properties.
+- **Low walls and partitions**: Setting a lower height (e.g. `25`–`35`) creates half-walls, bar counters, pony walls, or partitions that don't block the view of furniture or room interiors behind them.
+- **Opening height matching**: Doors, windows, and passages placed along a wall automatically inherit the wall's height (`height * 0.85`), keeping the frame proportionate. When a wall is taller than standard height (`60`), a wall header (lintel) is drawn above standard doors and openings.
 
 For a local preview with simulated entities and view, height, opacity and state
 controls, see [the development preview](../docker/README.md#3d-development-preview).
