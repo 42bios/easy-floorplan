@@ -15,6 +15,7 @@ import type {
   FloorplanCardConfig,
   Furniture,
   Opening,
+  Roof,
   SliderStyle,
   Tracker,
   Wall,
@@ -81,7 +82,13 @@ import {
   openingIsGlazed,
   openingIsPassage,
 } from "./render";
-import { normalizeProjection, normalizeWallHeight, normalizeWallOpacity, MAX_WALL_HEIGHT } from "./projection";
+import {
+  normalizeProjection,
+  normalizeWallHeight,
+  normalizeWallOpacity,
+  MAX_WALL_HEIGHT,
+  defaultRoofHeight,
+} from "./projection";
 import { defaultItemAction } from "./actions";
 import { DEFAULT_SKIN, SKINS, findSkin, MAX_SKIN_WALL_WIDTH } from "./skins";
 
@@ -2198,6 +2205,100 @@ export function areaForm(a: Area): FormSpec {
         // is about to appear — the fit's own ceiling is the natural opening
         // bid, and unlike before it is now a real, re-selectable value.
         out = { ...rest, zoom: fitZoom ? undefined : MAX_AREA_ZOOM_FIT };
+      }
+      return out;
+    },
+  };
+}
+
+export { defaultRoofHeight };
+
+export function roofForm(r: Roof, defaultWallHeight = 60): FormSpec {
+  const isShed = r.type === "shed";
+  const isHipOrGable = r.type === "gable" || r.type === "hip";
+  const isFlat = r.type === "flat";
+  const defaultHeight = defaultRoofHeight(r.type ?? "gable", defaultWallHeight);
+
+  return {
+    fields: [
+      {
+        name: "type",
+        label: "Roof style",
+        helper: "Roof geometry; not shown on the card yet",
+        selector: dropdown(
+          opt("flat", "Flat slab"),
+          opt("gable", "Gable pitch"),
+          opt("hip", "Hip roof"),
+          opt("shed", "Shed (mono-pitch)")
+        ),
+      },
+      ...(isShed
+        ? [
+            {
+              name: "highSide",
+              label: "High side",
+              helper: "Which side slopes up to the ridge height",
+              selector: dropdown(
+                opt("top", "Top / North"),
+                opt("bottom", "Bottom / South"),
+                opt("right", "Right / East"),
+                opt("left", "Left / West")
+              ),
+            },
+          ]
+        : []),
+      ...(isHipOrGable
+        ? [
+            {
+              name: "ridge",
+              label: "Ridge orientation",
+              helper: "Ridge line direction across the roof",
+              selector: dropdown(
+                opt("auto", "Auto (longer side)"),
+                opt("horizontal", "Horizontal (X-axis)"),
+                opt("vertical", "Vertical (Y-axis)")
+              ),
+            },
+          ]
+        : []),
+      ...(!isFlat
+        ? [
+            {
+              name: "height",
+              label: "Ridge height",
+              helper: "Ridge height above eaves across footprint bounding box (canvas units)",
+              selector: { number: { min: 0, max: 200, step: 5, mode: "slider" as const } },
+            },
+          ]
+        : []),
+      {
+        name: "overhang",
+        label: "Overhang / Eaves",
+        helper: "Horizontal eaves projection beyond the footprint",
+        selector: { number: { min: 0, max: 50, step: 1, mode: "slider" as const } },
+      },
+    ],
+    data: {
+      type: r.type ?? "gable",
+      highSide: r.highSide ?? "top",
+      ridge: r.ridge ?? "auto",
+      height: r.height ?? defaultHeight,
+      overhang: r.overhang ?? 0,
+    },
+    toPatch: (p) => {
+      let out = p;
+      if ("type" in out) {
+        if (out.type === "flat") {
+          out = { ...out, highSide: undefined, ridge: undefined };
+        } else if (out.type !== "shed") {
+          out = { ...out, highSide: undefined };
+        }
+      }
+      if ("ridge" in out && (out.ridge === "auto" || !out.ridge)) {
+        out = { ...out, ridge: undefined };
+      }
+      if ("overhang" in out && (out.overhang === 0 || out.overhang === undefined)) {
+        out = { ...out, overhang: undefined };
       }
       return out;
     },

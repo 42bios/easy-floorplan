@@ -100,6 +100,7 @@ editor and locking finished elements in place.
 | <a name="follow-the-sun"></a><a name="sunlight"></a>[Lighting](docs/lighting.md) | Device light, sun, moon, skylights, ambient daylight and clouds. |
 | <a name="skins"></a><a name="overlay-scale"></a><a name="compact-header"></a><a name="rotation-that-follows-the-screen"></a><a name="styling-hooks-card-mod"></a>[Appearance](docs/appearance.md) | Skins, colors, line art, SVG export, 3D view, room navigation, scaling and styling. |
 | <a name="dead-spaces"></a><a name="doors-on-locks"></a><a name="actions-on-rooms"></a><a name="stairs-that-change-floor"></a><a name="offline-devices"></a><a name="advanced-hiding-logic"></a>[Behaviour](docs/behavior.md) | Actions, visibility, floor navigation and unavailable entities. |
+| [Roofs](docs/roofs.md) | Roof styles (gable, hip, shed, flat), configuration, overhang, and editing |
 | [Furniture symbols](furniture/README.md) | Creating and contributing your own symbols. |
 | [Video walkthrough](https://youtu.be/M-b7xK-4Bpw) | A community setup guide in Italian. |
 
