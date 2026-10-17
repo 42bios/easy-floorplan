@@ -58,7 +58,7 @@ Use the **Roof** drawing tool from the editor toolbar or drawing tool picker.
 
 ### Settings & Field Details
 
-- **Type (`type`)**: `gable`, `hip`, `shed`, or `flat`.
+- **Type (`type`)**: `gable`, `hip`, `shed`, or `flat`. Pitched roofs (`gable`, `hip`, `shed`) project sloped planes across their footprint bounding box. Complex footprints (such as L-shaped, T-shaped, or cross plans) should be composed by drawing multiple rectangular roofs that intersect, allowing cross-gable valleys and distinct ridges to generate cleanly.
 - **Height (`height`)**:
   - For pitched roofs (`gable`, `hip`, `shed`), this is the ridge height above the eaves in canvas units. Defaults to `round(wallHeight * 0.6)`.
   - For `flat` roofs, this is the thickness of the flat slab. Defaults to `8`.
@@ -69,16 +69,16 @@ Use the **Roof** drawing tool from the editor toolbar or drawing tool picker.
   - `bottom`: High side at canvas max-Y (bottom edge), sloping down toward top.
   - `left`: High side at canvas min-X (left edge), sloping down toward right.
   - `right`: High side at canvas max-X (right edge), sloping down toward left.
-- **Elevation (`elevation`)**: Optional base elevation override. By default, roofs rest directly on top of their floor's walls (`wallHeight`).
+- **Elevation (`elevation`)**: Optional base elevation override (`elevation?: number`). By default, roofs rest directly on top of their floor's walls (`z0 = floorBaseZ + wallHeight`) without requiring an explicit elevation field in the editor.
 - **Color (`color`)**: Custom roof surface color (hex or named color). Defaults to `#8d6e63`.
 
 ---
 
-## 3D Isometric Rendering (Upcoming)
+## 3D Isometric Rendering (Upcoming — not shown on the card yet)
 
-Roof geometries support complete 3D solid calculation (including gable, hip, shed, and flat roof profiles, ridge calculations, eaves overhang, and cross-gable valley intersections). Full 3D solid rendering in isometric view (`projection: iso`) will be enabled under dedicated display conditions in a subsequent update. Currently, roofs are drawn, shaped, and managed in the 2D visual editor.
+Roof geometries support complete 3D solid calculation (including gable, hip, shed, and flat roof profiles, ridge calculations, eaves overhang, and cross-gable valley intersections). Roofs are currently configured in the 2D visual editor; full 3D solid rendering on the card is **not shown on the card yet** and will be enabled in an upcoming release (with multi-floor and outdoor stacking #370).
 
-1. **Automatic Solid Generation**: (disabled until further notice) Roof geometry is projected into 3D isometric solids with directional shading and horizontal course lines along sloped planes.
+1. **Automatic Solid Generation**: Roof geometry is projected into 3D isometric solids with directional shading and horizontal course lines along sloped planes.
 2. **Cross-Gable Valley Intersection**: When multiple gable roofs intersect on the same floor (such as T-shaped or L-shaped house layouts), the geometry automatically calculates valley lines and trims intersecting faces cleanly.
 3. **Room Focus & Interior Peeking**:
    - Tapping a roof in 3D view zooms and focuses the room underneath (via `areaContainingPoint`).
