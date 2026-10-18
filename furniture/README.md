@@ -111,7 +111,8 @@ say how, and both are numbers or fixed words, like everything else here:
   the piece is mirrored with `hand: left`). `min` is the fraction left when fully retracted.
   `open` says which way an open cover goes: an awning opens `extended`, a curtain opens
   `retracted`. A piece with no entity bound draws at full size, which is also how the editor
-  shows it.
+  shows it. On a `w` piece, `hand: center` draws a pair that meets in the middle: each half
+  gathers at its own end.
 - **`elevation`**: where the piece sits in the 3D view, as fractions of the wall height,
   instead of standing on the floor. An awning is a sheet under the eaves.
 

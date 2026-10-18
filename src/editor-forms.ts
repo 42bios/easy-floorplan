@@ -1939,8 +1939,8 @@ export function furnitureForm(
             {
               name: "hand",
               label: "Gathers at",
-              helper: "Which end it bunches up at when open",
-              selector: dropdown(opt("right", "left"), opt("left", "right")),
+              helper: "Which end it bunches up at when open. Both ends: a pair that meets in the middle",
+              selector: dropdown(opt("right", "left"), opt("left", "right"), opt("center", "both ends")),
             },
           ]
         : []),

@@ -6894,6 +6894,34 @@ export function shownFurniture(
 }
 
 /**
+ * The piece as it is drawn right now, as one or more parts. A curtain with
+ * `hand: center` is a pair that meets in the middle and gathers at both ends
+ * (issue #196): each half is the same curtain, half as wide, gathering at its
+ * own end. Everything else is the single piece {@link shownFurniture} gives.
+ * Both halves keep the piece's id, so they stay one thing to tap and to style.
+ */
+export function shownPieces(
+  f: Furniture,
+  state: { state: string; attributes?: Record<string, unknown> } | undefined,
+  catalog: SymbolCatalog = BUILTIN_SYMBOLS,
+): Furniture[] {
+  if (f.hand !== "center" || findSymbol(catalog, f.type)?.extend?.axis !== "w") {
+    return [shownFurniture(f, state, catalog)];
+  }
+  const q = f.w / 4;
+  const rad = ((f.angle ?? 0) * Math.PI) / 180;
+  const half = (side: -1 | 1): Furniture => ({
+    ...f,
+    x: f.x + side * q * Math.cos(rad),
+    y: f.y + side * q * Math.sin(rad),
+    w: f.w / 2,
+    // The left half gathers at the left end, the right half mirrored at the right.
+    hand: side < 0 ? "right" : "left",
+  });
+  return [shownFurniture(half(-1), state, catalog), shownFurniture(half(1), state, catalog)];
+}
+
+/**
  * Concentric pulsing rings for presence/movement devices. When `active`, the rings
  * animate (CSS keyframes `fp-ripple`, defined in each component's styles); when idle
  * only the faint center dot shows.

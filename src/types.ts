@@ -1146,10 +1146,11 @@ export interface Furniture {
   type: FurnitureType | (string & {});
   /**
    * L-shaped sectional: which side the chaise extends on. Curtain (issue
-   * #196): which side it gathers at when open. Mirrors the symbol, so it works
-   * on any glyph with a handedness. Default `right` (unmirrored).
+   * #196): which side it gathers at when open, or `center` for a pair that
+   * meets in the middle and gathers at both ends. `left` mirrors the symbol,
+   * so it works on any glyph with a handedness. Default `right` (unmirrored).
    */
-  hand?: SectionalHand;
+  hand?: SectionalHand | "center";
   x: number;
   y: number;
   /** Width / height in virtual units. */

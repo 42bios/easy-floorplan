@@ -77,7 +77,7 @@ import {
   entityStateText,
   renderRipple,
   renderFurniture,
-  shownFurniture,
+  shownPieces,
   furnitureColor,
   furnitureAccessibleName,
   furnitureActionForGesture,
@@ -1743,9 +1743,13 @@ export class FloorplanCard extends LitElement {
     // top of its block under the isometric view — the same drawing either way.
     // Awnings and curtains at their cover's position (issue #196); every other
     // piece passes through untouched.
-    const furniture = active.furniture.map((f) =>
-      shownFurniture(f, f.entity ? renderHass?.states[f.entity] : undefined, symbolCatalog(c.symbols))
+    // A center-closing curtain is two halves; it keeps one action, anchored
+    // on the piece as configured.
+    const pieces = active.furniture.map((f) =>
+      shownPieces(f, f.entity ? renderHass?.states[f.entity] : undefined, symbolCatalog(c.symbols))
     );
+    const furniture = pieces.flat();
+    const actionFurniture = pieces.map((p, i) => (p.length === 1 ? p[0]! : active.furniture[i]!));
     const drawFurniture = (f: Furniture): SVGTemplateResult => renderFurniture(
       f,
       furnitureColor(f, f.entity ? renderHass?.states[f.entity]?.state : undefined) ?? (lineArt ? LINE_INK : undefined),
@@ -2306,7 +2310,7 @@ export class FloorplanCard extends LitElement {
           (o) => this._renderOpeningMark(o, c, rot, scale, renderHass)
         )}
             ${repeat(
-          furniture,
+          actionFurniture,
           (f, i) => f.id || i,
           (f) => this._renderFurnitureAction(f, c, rot, floors, active.id)
         )}

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { shownFurniture } from "./render";
+import { shownFurniture, shownPieces } from "./render";
 import { BUILTIN_SYMBOLS, normalizeSymbol } from "./symbols";
 import { furnitureForm } from "./editor-forms";
 import type { Furniture } from "./types";
@@ -42,6 +42,37 @@ describe("awning and curtain follow their cover (issue #196)", () => {
     expect(open.x - open.w / 2).toBeCloseTo(500 - 80);
     const right = shownFurniture({ ...curtain, hand: "left" }, cover(100));
     expect(right.x + right.w / 2).toBeCloseTo(500 + 80);
+  });
+
+  it("splits a center curtain into two halves that gather at both ends", () => {
+    const pair = { ...curtain, hand: "center" as const };
+    const [l, r] = shownPieces(pair, cover(0));
+    // Closed: the two halves meet in the middle and cover the whole width.
+    expect(l!.w).toBeCloseTo(80);
+    expect(l!.x - l!.w / 2).toBeCloseTo(420);
+    expect(l!.x + l!.w / 2).toBeCloseTo(500);
+    expect(r!.x - r!.w / 2).toBeCloseTo(500);
+    expect(r!.x + r!.w / 2).toBeCloseTo(580);
+    expect([l!.hand, r!.hand]).toEqual(["right", "left"]);
+    // Open: each half bunched at its own end.
+    const [lo, ro] = shownPieces(pair, cover(100));
+    expect(lo!.w).toBeCloseTo(80 * 0.14);
+    expect(lo!.x - lo!.w / 2).toBeCloseTo(420);
+    expect(ro!.x + ro!.w / 2).toBeCloseTo(580);
+    expect(lo!.id).toBe("c");
+    expect(ro!.id).toBe("c");
+  });
+
+  it("splits a rotated center curtain along its own width", () => {
+    const [l, r] = shownPieces({ ...curtain, hand: "center", angle: 90 }, cover(0));
+    expect(l!.x).toBeCloseTo(500);
+    expect(l!.y).toBeCloseTo(260);
+    expect(r!.y).toBeCloseTo(340);
+  });
+
+  it("gives one piece for anything that is not a center curtain", () => {
+    expect(shownPieces(curtain, cover(0))).toEqual([curtain]);
+    expect(shownPieces({ ...awning, hand: "center" }, cover(100))).toHaveLength(1);
   });
 
   it("fails to retracted on an outage, and leaves an unbound piece or ordinary furniture alone", () => {
