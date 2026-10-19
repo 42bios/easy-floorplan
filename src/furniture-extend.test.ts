@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { shownFurniture, shownPieces } from "./render";
 import { BUILTIN_SYMBOLS, normalizeSymbol } from "./symbols";
 import { furnitureForm } from "./editor-forms";
+import { furnitureSolid } from "./projection";
 import type { Furniture } from "./types";
 
 const cover = (pos: number) => ({ state: pos > 0 ? "open" : "closed", attributes: { current_position: pos } });
@@ -81,6 +82,25 @@ describe("awning and curtain follow their cover (issue #196)", () => {
     expect(shownFurniture(unbound, cover(0))).toBe(unbound);
     const sofa: Furniture = { id: "s", type: "sofa", x: 0, y: 0, w: 100, h: 50, entity: "cover.x" };
     expect(shownFurniture(sofa, cover(0))).toBe(sofa);
+  });
+
+  it("draws a curtain fully across on an outage, like a closed cover", () => {
+    expect(shownFurniture(curtain, { state: "unavailable" })).toBe(curtain);
+    expect(shownFurniture(curtain, undefined)).toBe(curtain);
+    const [l, r] = shownPieces({ ...curtain, hand: "center" }, { state: "unavailable" });
+    expect(l!.w + r!.w).toBeCloseTo(160);
+  });
+
+  it("raises a hanging piece's 3D block between its two heights", () => {
+    const flat = (x: number, y: number) => ({ x, y });
+    const block = furnitureSolid(awning, flat, 60 * 0.78, "#888", undefined, 60 * 0.74);
+    expect(block.z0).toBeCloseTo(44.4);
+    expect(block.z1).toBeCloseTo(46.8);
+    // The footprint is unchanged by the lift: the piece's own rectangle.
+    expect(block.base[0]).toEqual({ x: 350, y: 200 });
+    expect(block.base[2]).toEqual({ x: 650, y: 400 });
+    // A standing piece still starts on the floor.
+    expect(furnitureSolid(awning, flat, 20, "#888").z0).toBe(0);
   });
 
   it("reads open/closed when a cover has no position", () => {

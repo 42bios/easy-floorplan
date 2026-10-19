@@ -6865,7 +6865,8 @@ export function renderFurniture(
  * an unbound awning draws extended, which is also how the editor shows it.
  *
  * The cover's position is read the way a shutter's is ({@link shutterAmount}),
- * so a dropout fails to the retracted end rather than guessing.
+ * so a dropout reads as a closed cover rather than a guess: an awning draws
+ * retracted, and a curtain (`open: "retracted"`) draws fully across.
  */
 export function shownFurniture(
   f: Furniture,

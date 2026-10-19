@@ -1743,13 +1743,15 @@ export class FloorplanCard extends LitElement {
     // top of its block under the isometric view — the same drawing either way.
     // Awnings and curtains at their cover's position (issue #196); every other
     // piece passes through untouched.
-    // A center-closing curtain is two halves; it keeps one action, anchored
-    // on the piece as configured.
+    // A center-closing curtain is two halves; it keeps one action, with its
+    // icon on the left half so it never sits over the gap once both gather.
     const pieces = active.furniture.map((f) =>
       shownPieces(f, f.entity ? renderHass?.states[f.entity] : undefined, symbolCatalog(c.symbols))
     );
     const furniture = pieces.flat();
-    const actionFurniture = pieces.map((p, i) => (p.length === 1 ? p[0]! : active.furniture[i]!));
+    const actionFurniture = pieces.map((p, i) => (p.length === 1
+      ? p[0]!
+      : { ...active.furniture[i]!, x: p[0]!.x, y: p[0]!.y }));
     const drawFurniture = (f: Furniture): SVGTemplateResult => renderFurniture(
       f,
       furnitureColor(f, f.entity ? renderHass?.states[f.entity]?.state : undefined) ?? (lineArt ? LINE_INK : undefined),
