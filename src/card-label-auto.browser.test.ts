@@ -205,6 +205,34 @@ describe("labelPosition: auto", () => {
   });
 });
 
+describe("labelPosition: auto stays idle once placed", () => {
+  afterEach(() => {
+    document.body.innerHTML = "";
+  });
+
+  it.each([
+    ["without an auto label", undefined],
+    ["with an auto label", "auto"],
+  ] as const)("reads no layout while idle, %s", async (_name, labelPosition) => {
+    const walls = [wall(0, 325, 1000, 325)];
+    await mount([device("d", 500, 300, labelPosition ? { labelPosition } : {})], walls);
+    // Let it settle a few frames, then count layout reads over 30 idle frames.
+    for (let i = 0; i < 5; i++) await nextFrame();
+    let n = 0;
+    const proto = Element.prototype.getBoundingClientRect;
+    Element.prototype.getBoundingClientRect = function (this: Element) {
+      n++;
+      return proto.call(this);
+    };
+    try {
+      for (let i = 0; i < 30; i++) await nextFrame();
+    } finally {
+      Element.prototype.getBoundingClientRect = proto;
+    }
+    expect(n).toBe(0);
+  });
+});
+
 describe("labelPosition: auto on the editor canvas", () => {
   afterEach(() => {
     document.body.innerHTML = "";

@@ -300,6 +300,8 @@ export class FloorplanCard extends LitElement {
   /** Whether this render can place auto labels at all (not under the 3D view, not mid-turn). */
   private _autoLabelsMeasurable = false;
   private _autoResize?: ResizeObserver;
+  /** The `.plan` element `_autoResize` is watching. */
+  private _autoResizeTarget?: HTMLElement;
   private readonly _replayController = new ReplayControllerImpl({
     getConfig: () => this._config,
     getHass: () => this.hass,
@@ -559,6 +561,12 @@ export class FloorplanCard extends LitElement {
       this._autoLayoutKey = undefined;
       return;
     }
+    // No auto labels on screen: nothing to place, so no layout to read.
+    if (this._autoLabelSig.length === 0) {
+      this._autoLayoutKey = undefined;
+      this._autoSides.clear();
+      return;
+    }
     const key = `${this._autoLayoutBase}|${this._autoLabelSig.join(",")}`;
     if (key === this._autoLayoutKey) return;
     const plan = this.renderRoot.querySelector<HTMLElement>(".plan");
@@ -570,9 +578,14 @@ export class FloorplanCard extends LitElement {
         this._syncAutoLabels();
       });
     }
-    // Observed afresh each time: a skin change rebuilds .plan's subtree.
-    this._autoResize?.disconnect();
-    this._autoResize?.observe(plan);
+    // Observed once per .plan element: observe() always delivers a first
+    // notification, so re-observing the same element on every pass would
+    // never settle. A re-render that replaces .plan is observed afresh.
+    if (this._autoResize && plan !== this._autoResizeTarget) {
+      this._autoResize.disconnect();
+      this._autoResize.observe(plan);
+      this._autoResizeTarget = plan;
+    }
     const r = overlay.getBoundingClientRect();
     if (!(r.width > 0 && r.height > 0)) return;
     this._autoLayoutKey = key;
@@ -614,6 +627,8 @@ export class FloorplanCard extends LitElement {
     for (const [k, side] of sides) {
       if (this._autoSides.get(k) !== side) changed = true;
     }
+    // Forget the sides of labels no longer on the plan.
+    for (const k of [...this._autoSides.keys()]) if (!sides.has(k)) this._autoSides.delete(k);
     if (!changed) return;
     for (const [k, side] of sides) this._autoSides.set(k, side);
     this.requestUpdate();
@@ -766,6 +781,7 @@ export class FloorplanCard extends LitElement {
     this._unsubscribeOrientation = undefined;
     this._autoResize?.disconnect();
     this._autoResize = undefined;
+    this._autoResizeTarget = undefined;
     // Not connected any more, so this stops it.
     this._syncMoonClock();
     super.disconnectedCallback();

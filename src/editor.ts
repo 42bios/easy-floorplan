@@ -834,6 +834,8 @@ export class FloorplanCardEditor extends LitElement {
       bounds: rectToBox(stage.getBoundingClientRect()),
       scalePlan: stage.classList.contains("scale-plan"),
     });
+    // Forget the sides of labels no longer on the canvas.
+    for (const k of [...this._autoSides.keys()]) if (!sides.has(k)) this._autoSides.delete(k);
     let changed = false;
     for (const [k, side] of sides) {
       if (this._autoSides.get(k) !== side) {
