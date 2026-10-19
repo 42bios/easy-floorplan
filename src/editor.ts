@@ -5502,7 +5502,7 @@ export class FloorplanCardEditor extends LitElement {
     if (!anchor) return nothing;
     const path = computeLeaderLinePath(anchor, p);
     const selected = this._isSel("panel", p.id);
-    const color = p.color || "#00e5ff";
+    const color = cssColorOr(p.color, "#00e5ff");
     return svg`
       <g class="panel-leader-sel ${selected ? "selected" : ""}">
         <circle cx=${anchor.x} cy=${anchor.y} r="3" fill=${color} opacity="0.8" />
@@ -6205,7 +6205,7 @@ export class FloorplanCardEditor extends LitElement {
   ): TemplateResult {
     const selected = this._isSel("panel", p.id);
     const metricCount = p.metrics?.length ?? 0;
-    const accent = p.color || "#00e5ff";
+    const accent = cssColorOr(p.color, "#00e5ff");
     return html`
       <div
         class="edit-panel ${selected ? "selected" : ""}"
