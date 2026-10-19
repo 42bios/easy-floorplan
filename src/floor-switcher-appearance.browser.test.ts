@@ -175,4 +175,19 @@ describe("floor switcher appearance", () => {
     expect(getComputedStyle(summarySpan).fontSize).toBe("11px");
     expect(parseFloat(getComputedStyle(summarySpan).opacity)).toBeCloseTo(0.85, 2);
   });
+
+  it("scrolls only a switcher that shows summaries, so plain buttons keep their shadow", async () => {
+    const plain = await mount({});
+    expect(getComputedStyle(plain.switcher!).overflowX).toBe("visible");
+    expect(getComputedStyle(plain.switcher!).overflowY).toBe("visible");
+    document.body.replaceChildren();
+
+    const t = await mount({ floorSummary: { enabled: true } });
+    t.config.floors![0].summary = { customText: "21.5°C" };
+    t.card.setConfig(t.config);
+    await t.card.updateComplete;
+    const sw = t.card.shadowRoot!.querySelector<HTMLElement>(".floor-switcher")!;
+    expect(sw.classList.contains("has-summaries")).toBe(true);
+    expect(getComputedStyle(sw).overflowY).toBe("auto");
+  });
 });

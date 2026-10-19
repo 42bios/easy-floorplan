@@ -2686,9 +2686,18 @@ export class FloorplanCard extends LitElement {
       ? rotatePlanPoint(at.x, at.y, cssNumber(c.width, DEFAULT_WIDTH), cssNumber(c.height, DEFAULT_HEIGHT), rot)
       : undefined;
     const dims = rotatedCanvasSize(cssNumber(c.width, DEFAULT_WIDTH), cssNumber(c.height, DEFAULT_HEIGHT), rot);
+    // The discovered HA-area entities come from the registries, which
+    // renderHass does not carry; their states are in it, because they are
+    // watched (`_syncSummaryDiscovery`).
+    const summaries = floors.map((f) => {
+      const s = floorSummaryShown(f, c.floorSummary)
+        ? computeFloorSummary(f, renderHass, c.floorSummary, this._summaryHaEntities.get(f.id) ?? [])
+        : undefined;
+      return s?.enabled && s.badgeText ? s : undefined;
+    });
     return html`
       <div
-        class="floor-switcher ${floorSwitcherClasses(c)} ${placed ? "placed" : ""}"
+        class="floor-switcher ${floorSwitcherClasses(c)} ${placed ? "placed" : ""} ${summaries.some(Boolean) ? "has-summaries" : ""}"
         part="floor-switcher"
         role="group"
         aria-label="Select floor"
@@ -2696,24 +2705,18 @@ export class FloorplanCard extends LitElement {
         ? `left:${(placed.x / dims.w) * 100}%; top:${(placed.y / dims.h) * 100}%;`
         : nothing}
       >
-        ${floors.map((f) => {
+        ${floors.map((f, i) => {
           // Per-floor accent (issue #67): applied only while active so the
           // resting buttons stay theme-neutral. cssColor gates the config
           // string; no custom color falls back to the theme primary.
           const accent = f.id === active.id ? cssColor(f.color) : undefined;
-          // The discovered HA-area entities come from the registries, which
-          // renderHass does not carry; their states are in it, because they
-          // are watched (`_syncSummaryDiscovery`).
-          const summary = floorSummaryShown(f, c.floorSummary)
-            ? computeFloorSummary(f, renderHass, c.floorSummary, this._summaryHaEntities.get(f.id) ?? [])
-            : undefined;
-          const hasSummary = !!(summary && summary.enabled && summary.badgeText);
-          const titleText = (hasSummary && summary?.tooltip) || f.name;
+          const summary = summaries[i];
+          const titleText = summary?.tooltip || f.name;
 
           return html`
             <button
               type="button"
-              class="floor-button ${f.id === active.id ? "active" : ""} ${hasSummary ? "has-summary" : ""}"
+              class="floor-button ${f.id === active.id ? "active" : ""} ${summary ? "has-summary" : ""}"
               part=${f.id === active.id ? "floor-button floor-button-active" : "floor-button"}
               data-floor-id=${f.id}
               title=${titleText}
@@ -2722,7 +2725,7 @@ export class FloorplanCard extends LitElement {
               style=${accent ? `--fp-floor-accent:${accent};` : nothing}
               @click=${() => this._goToFloor(floors, f.id)}
             >
-              ${hasSummary
+              ${summary
                 ? html`
                     <span class="floor-button-title">${f.short || f.name}</span>
                     <span class="floor-button-summary">${summary.badgeText}</span>

@@ -20,10 +20,18 @@ export const floorSwitcherStyles = css`
     align-items: stretch;
     gap: var(--fp-floor-switcher-gap, var(--_fp-floor-gap, 4px));
     max-width: calc(100% - 16px);
+  }
+  /* Summary buttons are taller, so a stack of them may need to scroll. Only
+     these switchers scroll: overflow-y: auto also clips overflow-x, and the
+     padding (taken back by the margin) keeps the buttons' shadow and focus
+     ring inside the clip. */
+  .floor-switcher.has-summaries {
     max-height: calc(100% - 24px);
     overflow-y: auto;
     overscroll-behavior: contain;
     scrollbar-width: thin;
+    padding: 4px;
+    margin: -4px;
   }
   .floor-switcher.row {
     flex-direction: row;
