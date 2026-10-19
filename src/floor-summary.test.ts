@@ -4,6 +4,8 @@ import {
   calculateFloorAverage,
   computeFloorSummary,
   resolvePanelMetrics,
+  resolvePanelAnchor,
+  computeLeaderLinePath,
   convertTemperature,
   normalizeTempUnit,
   formatMetricValue,
@@ -545,3 +547,101 @@ describe("resolvePanelMetrics", () => {
     expect(metrics[0]!.unit).toBe("°C");
   });
 });
+
+describe("resolvePanelAnchor", () => {
+  const floor: Floor = {
+    ...makeFloor("Test Floor"),
+    areas: [
+      {
+        id: "living_room",
+        name: "Living Room",
+        points: [
+          { x: 0, y: 0 },
+          { x: 100, y: 0 },
+          { x: 100, y: 100 },
+          { x: 0, y: 100 },
+        ],
+      },
+    ],
+    furniture: [
+      {
+        id: "sofa_1",
+        type: "sofa",
+        x: 50,
+        y: 60,
+        w: 40,
+        h: 20,
+        angle: 0,
+      },
+    ],
+  };
+
+  it("returns explicit anchor coordinate when specified", () => {
+    const panel: FloorInfoPanel = {
+      id: "p1",
+      x: 150,
+      y: 150,
+      anchor: { x: 42, y: 77 },
+    };
+    expect(resolvePanelAnchor(panel, floor)).toEqual({ x: 42, y: 77 });
+  });
+
+  it("resolves area centroid when targetId points to an area", () => {
+    const panel: FloorInfoPanel = {
+      id: "p1",
+      x: 150,
+      y: 150,
+      targetId: "living_room",
+    };
+    const anchor = resolvePanelAnchor(panel, floor);
+    expect(anchor).toBeDefined();
+    expect(anchor?.x).toBe(50);
+    expect(anchor?.y).toBe(50);
+  });
+
+  it("resolves furniture position when targetId points to a furniture item", () => {
+    const panel: FloorInfoPanel = {
+      id: "p1",
+      x: 150,
+      y: 150,
+      targetId: "sofa_1",
+    };
+    const anchor = resolvePanelAnchor(panel, floor);
+    expect(anchor).toEqual({ x: 50, y: 60 });
+  });
+
+  it("resolves enclosing area centroid when targetType is area", () => {
+    const panel: FloorInfoPanel = {
+      id: "p1",
+      x: 30,
+      y: 40,
+      targetType: "area",
+    };
+    const anchor = resolvePanelAnchor(panel, floor);
+    expect(anchor).toBeDefined();
+    expect(anchor?.x).toBe(50);
+    expect(anchor?.y).toBe(50);
+  });
+
+  it("returns undefined when no target or anchor exists", () => {
+    const panel: FloorInfoPanel = {
+      id: "p1",
+      x: 200,
+      y: 200,
+    };
+    expect(resolvePanelAnchor(panel, floor)).toBeUndefined();
+  });
+});
+
+describe("computeLeaderLinePath", () => {
+  it("draws straight line for nearly coincident points", () => {
+    expect(computeLeaderLinePath({ x: 10, y: 10 }, { x: 11, y: 11 })).toBe("M 10 10 L 11 11");
+  });
+
+  it("computes stepped angled path from anchor to panel", () => {
+    const path = computeLeaderLinePath({ x: 100, y: 100 }, { x: 200, y: 150 });
+    expect(path.startsWith("M 100 100 L ")).toBe(true);
+    expect(path.endsWith(" L 200 150")).toBe(true);
+  });
+});
+

@@ -18,6 +18,7 @@ import {
   DEFAULT_FLOOR_SUMMARY_METRICS,
   floorPanels,
 } from "./types";
+import { areaLabelPoint, pointInPolygon } from "./render";
 
 /**
  * Categorized candidate sensors discovered on a floor.
@@ -672,3 +673,57 @@ export function resolvePanelMetrics(
     };
   });
 }
+
+/**
+ * Resolves the plan anchor point (x, y) that an info-panel connects to via its leader line.
+ * Defaults to explicit anchor, area centroid for linked area, furniture center, or enclosing area.
+ */
+export function resolvePanelAnchor(
+  panel: FloorInfoPanel,
+  floor: Floor
+): { x: number; y: number } | undefined {
+  if (panel.anchor) {
+    return { x: panel.anchor.x, y: panel.anchor.y };
+  }
+  if (panel.targetId) {
+    const area = (floor.areas ?? []).find((a) => a.id === panel.targetId);
+    if (area && area.points?.length) {
+      return areaLabelPoint(area.points);
+    }
+    const furn = floor.furniture.find((f) => f.id === panel.targetId);
+    if (furn) {
+      return { x: furn.x, y: furn.y };
+    }
+  }
+  if (panel.targetType === "area") {
+    const enclosing = (floor.areas ?? []).find((a) => pointInPolygon(a.points, panel.x, panel.y));
+    if (enclosing && enclosing.points?.length) {
+      return areaLabelPoint(enclosing.points);
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Computes an angled orthogonal/dog-leg SVG path between an anchor point and an info-panel.
+ */
+export function computeLeaderLinePath(
+  anchor: { x: number; y: number },
+  panel: { x: number; y: number }
+): string {
+  const dx = panel.x - anchor.x;
+  const dy = panel.y - anchor.y;
+  if (Math.abs(dx) < 2 && Math.abs(dy) < 2) {
+    return `M ${anchor.x} ${anchor.y} L ${panel.x} ${panel.y}`;
+  }
+
+  // Stepped shoulder towards panel, then straight segment to panel origin
+  const signX = dx >= 0 ? 1 : -1;
+  const signY = dy >= 0 ? 1 : -1;
+  const elbowLen = Math.min(Math.abs(dy), Math.abs(dx) * 0.5, 30);
+  const shoulderX = anchor.x + signX * elbowLen;
+  const shoulderY = anchor.y + signY * elbowLen;
+
+  return `M ${anchor.x} ${anchor.y} L ${shoulderX} ${shoulderY} L ${panel.x} ${panel.y}`;
+}
+

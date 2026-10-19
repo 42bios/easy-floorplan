@@ -17,8 +17,15 @@ import type {
   Wall,
   Roof,
   AreaPoint,
+  FloorInfoPanel,
 } from "./types";
-import { computeFloorSummary } from "./floor-summary";
+import { floorPanels } from "./types";
+import {
+  computeFloorSummary,
+  resolvePanelAnchor,
+  computeLeaderLinePath,
+  resolvePanelMetrics,
+} from "./floor-summary";
 import { buildRenderHass } from "./replay-history/render-state-service";
 import "./replay-history/history-timeline";
 import "./replay-history/replay-panel";
@@ -1702,6 +1709,134 @@ export class FloorplanCard extends LitElement {
     `;
   }
 
+  private _defaultPanelMetricIcon(entityId?: string): string {
+    if (!entityId) return "mdi:gauge";
+    const domain = entityId.split(".")[0];
+    const lower = entityId.toLowerCase();
+    if (lower.includes("temp") || domain === "climate") return "mdi:thermometer";
+    if (lower.includes("humid")) return "mdi:water-percent";
+    if (lower.includes("power") || lower.includes("watt") || lower.includes("energy")) return "mdi:flash";
+    if (domain === "light") return "mdi:lightbulb";
+    if (domain === "binary_sensor" && (lower.includes("motion") || lower.includes("occupan") || lower.includes("presence")))
+      return "mdi:motion-sensor";
+    if (domain === "cover" || lower.includes("door") || lower.includes("window")) return "mdi:window-closed";
+    return "mdi:gauge";
+  }
+
+  private _isPanelVisible(
+    panel: FloorInfoPanel,
+    iso: boolean,
+    zoomedArea: Area | undefined
+  ): boolean {
+    if (iso ? panel.showIn3D === false : panel.showIn2D === false) {
+      return false;
+    }
+    if (panel.showOnlyWhenZoomed) {
+      if (!zoomedArea) return false;
+      if (panel.targetId && panel.targetId === zoomedArea.id) return true;
+      return pointInPolygon(zoomedArea.points, panel.x, panel.y);
+    }
+    return true;
+  }
+
+  private _renderPanelLeaderLines(
+    active: Floor,
+    _c: FloorplanCardConfig,
+    iso: boolean,
+    zoomedArea: Area | undefined
+  ): TemplateResult {
+    const panels = floorPanels(active).filter(
+      (p) => this._isPanelVisible(p, iso, zoomedArea) && p.showLeaderLine !== false
+    );
+    if (!panels.length) return svg`${nothing}`;
+
+    return svg`
+      <g class="fp-panel-leader-lines">
+        ${panels.map((p) => {
+          const anchor = resolvePanelAnchor(p, active);
+          if (!anchor) return nothing;
+          const color = cssColor(p.color) ?? "var(--fp-panel-accent, var(--fp-skin-accent, var(--primary-color, #03a9f4)))";
+          const d = computeLeaderLinePath(anchor, { x: p.x, y: p.y });
+          return svg`
+            <g class="fp-panel-leader" data-panel-id=${p.id}>
+              <circle cx=${anchor.x} cy=${anchor.y} r="3.5" class="fp-panel-anchor-ring" fill=${color} stroke=${color} stroke-width="1.2" fill-opacity="0.25" />
+              <circle cx=${anchor.x} cy=${anchor.y} r="1" class="fp-panel-anchor-dot" fill="#ffffff" />
+              <path d=${d} class="fp-panel-leader-line" stroke=${color} stroke-width="1.4" fill="none" />
+              <circle cx=${p.x} cy=${p.y} r="2.5" class="fp-panel-target-dot" fill=${color} />
+            </g>
+          `;
+        })}
+      </g>
+    `;
+  }
+
+  private _renderInfoPanel(
+    panel: FloorInfoPanel,
+    active: Floor,
+    c: FloorplanCardConfig,
+    rot: number,
+    _scale: OverlayScale,
+    renderHass: RenderHass | undefined
+  ): TemplateResult {
+    const { p, d } = this._display(panel.x, panel.y, c, rot);
+    const accent = cssColor(panel.color);
+    const style = panel.style ?? "tech";
+    const metrics = resolvePanelMetrics(panel, renderHass);
+
+    let targetArea: Area | undefined;
+    if (panel.targetId) {
+      targetArea = (active.areas ?? []).find((a) => a.id === panel.targetId);
+    }
+    if (!targetArea && panel.targetType === "area") {
+      targetArea = (active.areas ?? []).find((a) => pointInPolygon(a.points, panel.x, panel.y));
+    }
+
+    const title =
+      panel.title ||
+      targetArea?.name ||
+      (panel.targetId ? active.furniture.find((f) => f.id === panel.targetId)?.type : undefined) ||
+      "Telemetry";
+
+    const tappable = !!targetArea;
+
+    return html`
+      <div
+        class="fp-info-panel ${style} ${tappable ? "clickable" : ""}"
+        data-panel-id=${panel.id}
+        style="left:${(p.x / d.w) * 100}%; top:${(p.y / d.h) * 100}%;${
+          accent ? `--fp-panel-accent:${accent};` : ""
+        }"
+        @click=${tappable ? () => this._onPanelClick(targetArea!) : nothing}
+      >
+        <div class="fp-panel-header">
+          <span class="fp-panel-title" title=${title}>${title}</span>
+          <span class="fp-panel-status-dot"></span>
+        </div>
+        <div class="fp-panel-metrics">
+          ${metrics.length
+            ? metrics.map(
+                (m) => html`
+                  <div class="fp-panel-metric-row">
+                    <span class="fp-panel-metric-left">
+                      <ha-icon icon=${m.icon || this._defaultPanelMetricIcon(m.entity)}></ha-icon>
+                      <span class="fp-panel-metric-label" title=${m.label}>${m.label}</span>
+                    </span>
+                    <span class="fp-panel-metric-value">
+                      ${m.value}${m.unit ? html`<span class="fp-panel-metric-unit">${m.unit}</span>` : nothing}
+                    </span>
+                  </div>
+                `
+              )
+            : html`<span style="font-size:10px;opacity:0.6;">No metrics</span>`}
+        </div>
+      </div>
+    `;
+  }
+
+  private _onPanelClick(area: Area): void {
+    this._zoomedAreaId = this._zoomedAreaId === area.id ? undefined : area.id;
+  }
+
   protected render(): TemplateResult {
     if (!this._config) return html`${nothing}`;
     const c = this._displayConfig();
@@ -2271,6 +2406,7 @@ export class FloorplanCard extends LitElement {
                             opacity=${1 - sunLevel} />`
               : nothing
             }
+            ${this._renderPanelLeaderLines(active, c, iso, zoomedArea)}
             </g>
             </g>
           </svg>`
@@ -2315,6 +2451,11 @@ export class FloorplanCard extends LitElement {
           ),
           (it, i) => it.id || i,
           (it) => this._renderItem(it, c, rot, scale, renderHass)
+        )}
+            ${repeat(
+          floorPanels(active).filter((p) => this._isPanelVisible(p, iso, zoomedArea)),
+          (p, i) => p.id || i,
+          (p) => this._renderInfoPanel(p, active, c, rot, scale, renderHass)
         )}
           </div>
           </div>
@@ -3581,6 +3722,152 @@ export class FloorplanCard extends LitElement {
         opacity: 0;
         stroke-width: 14;
       }
+    }
+    /* ---- Floor Info-Panels & Leader Lines (issue #234) ---- */
+    .fp-panel-leader-line {
+      pointer-events: none;
+      filter: drop-shadow(0 0 2px var(--fp-panel-accent, #00e5ff));
+    }
+    .fp-panel-anchor-ring,
+    .fp-panel-anchor-dot,
+    .fp-panel-target-dot {
+      pointer-events: none;
+    }
+    .fp-info-panel {
+      position: absolute;
+      transform: translate(-50%, -50%) scale(var(--fp-inv-zoom, 1));
+      transition: transform 0.4s ease, opacity 0.2s ease, box-shadow 0.2s ease;
+      pointer-events: auto;
+      box-sizing: border-box;
+      user-select: none;
+      z-index: 10;
+      color: var(--fp-skin-text, var(--primary-text-color, #fff));
+      font-family: inherit;
+    }
+    .fp-info-panel.clickable {
+      cursor: pointer;
+    }
+    .fp-info-panel.clickable:hover {
+      filter: brightness(1.1);
+    }
+    .fp-info-panel.tech {
+      background: var(--fp-panel-bg, rgba(9, 23, 38, 0.94));
+      border: 1px solid var(--fp-panel-accent, #00e5ff);
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5), 0 0 12px rgba(0, 229, 255, 0.2);
+      clip-path: polygon(
+        0 8px,
+        8px 0,
+        calc(100% - 8px) 0,
+        100% 8px,
+        100% calc(100% - 8px),
+        calc(100% - 8px) 100%,
+        8px 100%,
+        0 calc(100% - 8px)
+      );
+      padding: 8px 12px;
+      min-width: 140px;
+    }
+    .fp-info-panel.minimal {
+      background: var(--fp-panel-bg, rgba(17, 24, 39, 0.88));
+      backdrop-filter: blur(8px);
+      border: 1px solid var(--fp-panel-border, rgba(255, 255, 255, 0.15));
+      border-radius: 8px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+      padding: 8px 12px;
+      min-width: 130px;
+    }
+    .fp-info-panel.pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: var(--fp-panel-bg, rgba(15, 23, 42, 0.9));
+      backdrop-filter: blur(8px);
+      border: 1px solid var(--fp-panel-border, var(--fp-panel-accent, rgba(255, 255, 255, 0.15)));
+      border-radius: 9999px;
+      padding: 4px 12px;
+      box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+      white-space: nowrap;
+    }
+    .fp-panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      padding-bottom: 4px;
+      margin-bottom: 4px;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    }
+    .fp-info-panel.tech .fp-panel-header {
+      border-bottom: 1px solid var(--fp-panel-accent, rgba(0, 229, 255, 0.3));
+    }
+    .fp-panel-title {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 0.5px;
+      text-transform: uppercase;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 160px;
+    }
+    .fp-panel-status-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--fp-panel-accent, #00e5ff);
+      box-shadow: 0 0 6px var(--fp-panel-accent, #00e5ff);
+    }
+    .fp-panel-metrics {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .fp-info-panel.pill .fp-panel-metrics {
+      flex-direction: row;
+      align-items: center;
+      gap: 8px;
+    }
+    .fp-panel-metric-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 11px;
+    }
+    .fp-info-panel.pill .fp-panel-metric-row {
+      gap: 4px;
+    }
+    .fp-panel-metric-left {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      overflow: hidden;
+    }
+    .fp-panel-metric-left ha-icon {
+      --mdc-icon-size: 13px;
+      color: var(--fp-panel-accent, currentColor);
+      flex-shrink: 0;
+    }
+    .fp-panel-metric-label {
+      font-size: 10px;
+      opacity: 0.8;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 90px;
+    }
+    .fp-panel-metric-value {
+      font-weight: 600;
+      font-size: 12px;
+      font-feature-settings: "tnum";
+      white-space: nowrap;
+      margin-left: auto;
+    }
+    .fp-panel-metric-unit {
+      font-size: 9px;
+      font-weight: 500;
+      opacity: 0.85;
+      margin-left: 2px;
     }
   `,
     lineArtStyles,

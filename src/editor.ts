@@ -28,7 +28,14 @@ import type {
   OverlayScale,
   PaletteColor,
   Roof,
+  FloorInfoPanel,
+  FloorInfoPanelMetric,
 } from "./types";
+import {
+  detectFloorSensors,
+  resolvePanelAnchor,
+  computeLeaderLinePath,
+} from "./floor-summary";
 import {
   normalizeSymbol,
   symbolCatalog,
@@ -52,6 +59,7 @@ import {
   configsEqual,
   emptyConfig,
   getFloors,
+  floorPanels,
   gridPercentToSnap,
   makeFloor,
   haFloorsOf,
@@ -243,7 +251,7 @@ const formLabel = (s: FormField): string => s.label;
 const formHelper = (s: FormField): string | undefined => s.helper;
 
 type Tool = "select" | "wall" | "door" | "passage" | "window" | "skylight" | "tracker" | "area" | "roof";
-type OverlaySel = { kind: "item" | "text"; id: string };
+type OverlaySel = { kind: "item" | "text" | "panel"; id: string };
 
 /** Toolbar metadata per tool: mdi icon + label (icons make the modes scannable). */
 const TOOL_META: Record<Tool, { icon: string; label: string }> = {
@@ -306,6 +314,7 @@ const SEL_KIND_ICON: Record<SelKind, string> = {
   tracker: "mdi:crosshairs-gps",
   area: "mdi:floor-plan",
   roof: "mdi:home-outline",
+  panel: "mdi:card-text-outline",
 };
 
 interface Drag {
@@ -384,6 +393,7 @@ interface Clipboard {
   trackers: Tracker[];
   areas: Area[];
   roofs?: Roof[];
+  panels?: FloorInfoPanel[];
 }
 
 /** Snap distance (virtual units) for openings onto walls. */
@@ -1888,6 +1898,9 @@ export class FloorplanCardEditor extends LitElement {
       } else if (s.kind === "roof") {
         const r = (f.roofs ?? []).find((x) => x.id === s.id);
         if (r) m.set(`roof:${r.id}`, { kind: "polygon", points: r.points.map((p) => ({ ...p })) });
+      } else if (s.kind === "panel") {
+        const p = floorPanels(f).find((x) => x.id === s.id);
+        if (p) m.set(`panel:${p.id}`, { kind: "pt", x: p.x, y: p.y });
       } else {
         // tracker — stored by top-left corner.
         const tr = (f.trackers ?? []).find((x) => x.id === s.id);
@@ -2451,6 +2464,24 @@ export class FloorplanCardEditor extends LitElement {
     this._tool = "select";
   }
 
+  private _addPanel(): void {
+    const f = this._floor();
+    const p: FloorInfoPanel = {
+      id: uid("panel"),
+      x: this._snap(this._config.width / 2),
+      y: this._snap(this._config.height / 2),
+      title: "Panel",
+      style: "tech",
+      showLeaderLine: true,
+      showIn2D: true,
+      showIn3D: true,
+      metrics: [],
+    };
+    this._commitFloor({ panels: [...floorPanels(f), p] });
+    this._selection = [{ kind: "panel", id: p.id }];
+    this._tool = "select";
+  }
+
   private _deleteSelected(): void {
     if (!this._selection.length) return;
     const f = this._floor();
@@ -2462,6 +2493,7 @@ export class FloorplanCardEditor extends LitElement {
     const trIds = this._idsOfKind("tracker");
     const aIds = this._idsOfKind("area");
     const rIds = this._idsOfKind("roof");
+    const pIds = this._idsOfKind("panel");
     this._commitFloor({
       walls: f.walls.filter((w) => !wIds.has(w.id)),
       openings: f.openings.filter((o) => !oIds.has(o.id)),
@@ -2471,6 +2503,7 @@ export class FloorplanCardEditor extends LitElement {
       trackers: (f.trackers ?? []).filter((tr) => !trIds.has(tr.id)),
       areas: (f.areas ?? []).filter((a) => !aIds.has(a.id)),
       roofs: (f.roofs ?? []).filter((r) => !rIds.has(r.id)),
+      panels: floorPanels(f).filter((p) => !pIds.has(p.id)),
     });
     this._clearSel();
   }
@@ -2488,6 +2521,7 @@ export class FloorplanCardEditor extends LitElement {
     const trIds = this._idsOfKind("tracker");
     const aIds = this._idsOfKind("area");
     const rIds = this._idsOfKind("roof");
+    const pIds = this._idsOfKind("panel");
     this._clipboard = structuredClone({
       walls: f.walls.filter((w) => wIds.has(w.id)),
       openings: f.openings.filter((o) => oIds.has(o.id)),
@@ -2497,6 +2531,7 @@ export class FloorplanCardEditor extends LitElement {
       trackers: (f.trackers ?? []).filter((tr) => trIds.has(tr.id)),
       areas: (f.areas ?? []).filter((a) => aIds.has(a.id)),
       roofs: (f.roofs ?? []).filter((r) => rIds.has(r.id)),
+      panels: floorPanels(f).filter((p) => pIds.has(p.id)),
     });
   }
 
@@ -2569,6 +2604,13 @@ export class FloorplanCardEditor extends LitElement {
       id: uid("roof"),
       points: r.points.map((p) => ({ x: p.x + off, y: p.y + off })),
     }));
+    const newPanels: FloorInfoPanel[] = (cb.panels ?? []).map((p: FloorInfoPanel) => ({
+      ...p,
+      ...loose,
+      id: uid("panel"),
+      x: p.x + off,
+      y: p.y + off,
+    }));
     this._commitFloor({
       walls: [...f.walls, ...newWalls],
       openings: [...f.openings, ...newOpenings],
@@ -2578,6 +2620,7 @@ export class FloorplanCardEditor extends LitElement {
       trackers: [...(f.trackers ?? []), ...newTrackers],
       areas: [...(f.areas ?? []), ...newAreas],
       roofs: [...(f.roofs ?? []), ...newRoofs],
+      panels: [...floorPanels(f), ...newPanels],
     });
     this._selection = [
       ...newWalls.map((w) => ({ kind: "wall" as const, id: w.id })),
@@ -2588,6 +2631,7 @@ export class FloorplanCardEditor extends LitElement {
       ...newTrackers.map((tr) => ({ kind: "tracker" as const, id: tr.id })),
       ...newAreas.map((a) => ({ kind: "area" as const, id: a.id })),
       ...newRoofs.map((r) => ({ kind: "roof" as const, id: r.id })),
+      ...newPanels.map((p) => ({ kind: "panel" as const, id: p.id })),
     ];
     this._tool = "select";
   }
@@ -2765,6 +2809,12 @@ export class FloorplanCardEditor extends LitElement {
   private _updateRoof(id: string, partial: Partial<Roof>): void {
     this._commitFloor({
       roofs: (this._floor().roofs ?? []).map((r) => (r.id === id ? { ...r, ...partial } : r)),
+    });
+  }
+
+  private _updatePanel(id: string, partial: Partial<FloorInfoPanel>): void {
+    this._commitFloor({
+      panels: floorPanels(this._floor()).map((p) => (p.id === id ? { ...p, ...partial } : p)),
     });
   }
 
@@ -3584,6 +3634,13 @@ export class FloorplanCardEditor extends LitElement {
     });
   }
 
+  private _updatePanelLive(id: string, partial: Partial<FloorInfoPanel>): void {
+    this._beginLive("panel", id, partial);
+    this._emitFloor({
+      panels: floorPanels(this._floor()).map((p) => (p.id === id ? { ...p, ...partial } : p)),
+    });
+  }
+
   private _patchConfigLive(partial: Partial<FloorplanCardConfig>): void {
     this._beginLive("config", "", partial);
     this._emit({ ...this._config, ...partial });
@@ -3603,7 +3660,7 @@ export class FloorplanCardEditor extends LitElement {
 
   /** Route a form patch to the right per-kind update helper (commit or burst). */
   private _applyElementPatch(
-    kind: "opening" | "item" | "text" | "furniture" | "tracker" | "wall" | "area" | "roof",
+    kind: "opening" | "item" | "text" | "furniture" | "tracker" | "wall" | "area" | "roof" | "panel",
     id: string,
     patch: Record<string, unknown>,
     live: boolean
@@ -3640,6 +3697,10 @@ export class FloorplanCardEditor extends LitElement {
       case "roof":
         if (live) this._updateRoofLive(id, patch);
         else this._updateRoof(id, patch);
+        break;
+      case "panel":
+        if (live) this._updatePanelLive(id, patch);
+        else this._updatePanel(id, patch);
         break;
     }
   }
@@ -3744,6 +3805,11 @@ export class FloorplanCardEditor extends LitElement {
         if (!r) return "Roof";
         const style = r.type ? r.type.charAt(0).toUpperCase() + r.type.slice(1) : "Roof";
         return `Roof · ${style} (${r.points.length}-pt)`;
+      }
+      case "panel": {
+        const p = floorPanels(f).find((x) => x.id === sel.id);
+        if (!p) return "Panel";
+        return `Panel · ${p.title || "Telemetry"}`;
       }
       default: {
         const tr = (f.trackers ?? []).find((x) => x.id === sel.id);
@@ -4275,6 +4341,112 @@ export class FloorplanCardEditor extends LitElement {
                         })}
                     />
                   </div>
+                  <!-- Floor Summary Settings (issue #234) -->
+                  <div class="pop-row" style="font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; opacity: 0.7; margin-top: 6px;">
+                    Summary
+                  </div>
+                  <div class="pop-row">
+                    <label>Summary</label>
+                    <input
+                      type="checkbox"
+                      title="Show aggregate summary on switcher button"
+                      .checked=${floor?.summary?.enabled !== false}
+                      @change=${(e: Event) =>
+                        this._commitFloor({
+                          summary: {
+                            ...floor?.summary,
+                            enabled: (e.target as HTMLInputElement).checked ? undefined : false,
+                          },
+                        })}
+                    />
+                  </div>
+                  <div class="pop-row">
+                    <label>Temp helper</label>
+                    ${this._renderEntityPicker(
+                      floor?.summary?.temperatureEntity ?? "",
+                      (entity) =>
+                        this._commitFloor({
+                          summary: {
+                            ...floor?.summary,
+                            temperatureEntity: entity || undefined,
+                          },
+                        }),
+                      ["sensor", "climate"]
+                    )}
+                  </div>
+                  <div class="pop-row">
+                    <label>Humidity helper</label>
+                    ${this._renderEntityPicker(
+                      floor?.summary?.humidityEntity ?? "",
+                      (entity) =>
+                        this._commitFloor({
+                          summary: {
+                            ...floor?.summary,
+                            humidityEntity: entity || undefined,
+                          },
+                        }),
+                      ["sensor", "climate"]
+                    )}
+                  </div>
+                  <div class="pop-row">
+                    <label>Presence helper</label>
+                    ${this._renderEntityPicker(
+                      floor?.summary?.presenceEntity ?? "",
+                      (entity) =>
+                        this._commitFloor({
+                          summary: {
+                            ...floor?.summary,
+                            presenceEntity: entity || undefined,
+                          },
+                        }),
+                      ["binary_sensor", "input_boolean", "person", "device_tracker"]
+                    )}
+                  </div>
+                  ${(() => {
+                    const discovered = floor ? detectFloorSensors(floor, this.hass) : undefined;
+                    const allDiscovered = discovered
+                      ? Array.from(
+                          new Set([
+                            ...discovered.temperature,
+                            ...discovered.humidity,
+                            ...discovered.presence,
+                            ...discovered.lights,
+                            ...discovered.windows,
+                          ])
+                        )
+                      : [];
+                    if (!allDiscovered.length) return nothing;
+                    return html`
+                      <div class="pop-row" style="flex-direction: column; align-items: stretch; gap: 4px;">
+                        <label style="font-size: 10px; opacity: 0.8;">Discovered Sensors (uncheck to exclude):</label>
+                        <div style="max-height: 100px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px;">
+                          ${allDiscovered.map((eid) => {
+                            const excluded = (floor?.summary?.excludeEntities ?? []).includes(eid);
+                            return html`
+                              <label style="font-size: 10px; display: flex; align-items: center; gap: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                                <input
+                                  type="checkbox"
+                                  .checked=${!excluded}
+                                  @change=${(e: Event) => {
+                                    const checked = (e.target as HTMLInputElement).checked;
+                                    const cur = floor?.summary?.excludeEntities ?? [];
+                                    const next = checked ? cur.filter((x) => x !== eid) : [...cur, eid];
+                                    this._commitFloor({
+                                      summary: {
+                                        ...floor?.summary,
+                                        excludeEntities: next.length ? next : undefined,
+                                      },
+                                    });
+                                  }}
+                                />
+                                ${eid}
+                              </label>
+                            `;
+                          })}
+                        </div>
+                      </div>
+                    `;
+                  })()}
                   <button
                     class="danger pop-action"
                     ?disabled=${floors.length <= 1}
@@ -4462,6 +4634,7 @@ export class FloorplanCardEditor extends LitElement {
                 (tr, i) => tr.id || i,
                 (tr) => this._renderTrackerSel(tr)
               )}
+              ${floorPanels(floor).map((p) => this._renderPanelLeaderSel(p, floor))}
               ${
                 this._draftTracker
                   ? svg`<rect class="tracker-draft"
@@ -4502,6 +4675,7 @@ export class FloorplanCardEditor extends LitElement {
                 .filter((o) => hasOpeningMark(o))
                 .map((o) => this._renderOpeningMarkOverlay(o, c, overlay))}
               ${floor.items.map((it) => this._renderItemOverlay(it, c, overlay))}
+              ${floorPanels(floor).map((p) => this._renderPanelOverlay(p, c))}
             </div>
           </div>
         </div>
@@ -5032,6 +5206,15 @@ export class FloorplanCardEditor extends LitElement {
         >
           <ha-icon icon="mdi:format-text"></ha-icon> Text
         </button>
+        <button
+          class="add-entry"
+          @click=${() => {
+            this._addPanel();
+            close();
+          }}
+        >
+          <ha-icon icon="mdi:card-text-outline"></ha-icon> Panel
+        </button>
         </div>
         <div class="furn-search">
           <ha-icon icon="mdi:magnify"></ha-icon>
@@ -5340,6 +5523,22 @@ export class FloorplanCardEditor extends LitElement {
             : nothing
         }
       </g>`;
+  }
+
+  private _renderPanelLeaderSel(p: FloorInfoPanel, floor: Floor): TemplateResult | typeof nothing {
+    if (p.showLeaderLine === false) return nothing;
+    const anchor = resolvePanelAnchor(p, floor);
+    if (!anchor) return nothing;
+    const path = computeLeaderLinePath(anchor, p);
+    const selected = this._isSel("panel", p.id);
+    const color = p.color || "#00e5ff";
+    return svg`
+      <g class="panel-leader-sel ${selected ? "selected" : ""}">
+        <circle cx=${anchor.x} cy=${anchor.y} r="3" fill=${color} opacity="0.8" />
+        <path d=${path} fill="none" stroke=${color} stroke-width="1.2" stroke-dasharray="3,3" opacity="0.6" />
+        <circle cx=${p.x} cy=${p.y} r="2.5" fill=${color} opacity="0.8" />
+      </g>
+    `;
   }
 
   /**
@@ -6025,6 +6224,33 @@ export class FloorplanCardEditor extends LitElement {
         @pointercancel=${this._onPointerCancel}
       >
         ${textLabel(this.hass, t) || "…"}
+      </div>
+    `;
+  }
+
+  private _renderPanelOverlay(
+    p: FloorInfoPanel,
+    c: FloorplanCardConfig
+  ): TemplateResult {
+    const selected = this._isSel("panel", p.id);
+    const metricCount = p.metrics?.length ?? 0;
+    const accent = p.color || "#00e5ff";
+    return html`
+      <div
+        class="edit-panel ${selected ? "selected" : ""}"
+        style="left:${(p.x / c.width) * 100}%; top:${(p.y / c.height) * 100}%; --fp-panel-accent:${accent};"
+        @pointerdown=${(e: PointerEvent) => this._onOverlayDown(e, { kind: "panel", id: p.id })}
+        @pointermove=${this._onOverlayMove}
+        @pointerup=${this._onOverlayUp}
+        @pointercancel=${this._onPointerCancel}
+      >
+        <div class="edit-panel-header">
+          <ha-icon icon="mdi:card-text-outline" class="edit-panel-icon"></ha-icon>
+          <span>${p.title || "Telemetry"}</span>
+        </div>
+        <div class="edit-panel-preview">
+          ${metricCount} ${metricCount === 1 ? "metric" : "metrics"} · ${p.style ?? "tech"}
+        </div>
       </div>
     `;
   }
@@ -6869,6 +7095,12 @@ export class FloorplanCardEditor extends LitElement {
       `;
     }
 
+    if (sel.kind === "panel") {
+      const p = floorPanels(this._floor()).find((x) => x.id === sel.id);
+      if (!p) return html`${nothing}`;
+      return this._renderPanelInspector(p);
+    }
+
     if (sel.kind === "furniture") {
       const f = this._floor().furniture.find((x) => x.id === sel.id);
       if (!f) return html`${nothing}`;
@@ -7218,6 +7450,234 @@ export class FloorplanCardEditor extends LitElement {
     }
 
     return html`${nothing}`;
+  }
+
+  private _renderPanelInspector(p: FloorInfoPanel): TemplateResult {
+    const f = this._floor();
+    const metrics = p.metrics ?? [];
+    const commitMetrics = (next: FloorInfoPanelMetric[]) =>
+      this._updatePanel(p.id, { metrics: next.length ? next : undefined });
+    const patchMetric = (i: number, part: Partial<FloorInfoPanelMetric>) =>
+      commitMetrics(metrics.map((m, j) => (j === i ? { ...m, ...part } : m)));
+
+    return html`
+      <div class="row">
+        <label>Title</label>
+        <input
+          type="text"
+          placeholder="e.g. Living Room, Climate"
+          .value=${p.title ?? ""}
+          @change=${(e: Event) =>
+            this._updatePanel(p.id, { title: (e.target as HTMLInputElement).value || undefined })}
+        />
+      </div>
+
+      <div class="row">
+        <label>Style</label>
+        <select
+          .value=${p.style ?? "tech"}
+          @change=${(e: Event) =>
+            this._updatePanel(p.id, {
+              style: ((e.target as HTMLSelectElement).value || "tech") as FloorInfoPanel["style"],
+            })}
+        >
+          <option value="tech">Tech (HUD chamfered)</option>
+          <option value="minimal">Minimal</option>
+          <option value="pill">Pill</option>
+        </select>
+      </div>
+
+      ${this._renderColorRow({
+        label: "Accent",
+        value: p.color,
+        swatch: "#00e5ff",
+        placeholder: "#00e5ff",
+        onLive: (color) => this._updatePanelLive(p.id, { color }),
+        onCommit: (color) => this._updatePanel(p.id, { color }),
+      })}
+
+      <div class="row">
+        <label>Target</label>
+        <select
+          .value=${p.targetType ?? "floor"}
+          @change=${(e: Event) => {
+            const tt = (e.target as HTMLSelectElement).value as FloorInfoPanel["targetType"];
+            this._updatePanel(p.id, { targetType: tt, targetId: undefined });
+          }}
+        >
+          <option value="floor">Floor (Plan Aggregate)</option>
+          <option value="area">Area / Room</option>
+          <option value="furniture">Furniture</option>
+          <option value="fixed">Fixed coordinate</option>
+        </select>
+      </div>
+
+      ${p.targetType === "area"
+        ? html`
+            <div class="row">
+              <label>Room</label>
+              <select
+                .value=${p.targetId ?? ""}
+                @change=${(e: Event) =>
+                  this._updatePanel(p.id, {
+                    targetId: (e.target as HTMLSelectElement).value || undefined,
+                  })}
+              >
+                <option value="">(None / nearest)</option>
+                ${(f.areas ?? []).map(
+                  (a) => html`<option value=${a.id}>${a.name || a.id}</option>`
+                )}
+              </select>
+            </div>
+          `
+        : nothing}
+
+      ${p.targetType === "furniture"
+        ? html`
+            <div class="row">
+              <label>Item</label>
+              <select
+                .value=${p.targetId ?? ""}
+                @change=${(e: Event) =>
+                  this._updatePanel(p.id, {
+                    targetId: (e.target as HTMLSelectElement).value || undefined,
+                  })}
+              >
+                <option value="">(None)</option>
+                ${f.furniture.map(
+                  (fu) =>
+                    html`<option value=${fu.id}>
+                      ${furnitureLabel(fu.type, this._symbols())} (${Math.round(fu.x)}, ${Math.round(fu.y)})
+                    </option>`
+                )}
+              </select>
+            </div>
+          `
+        : nothing}
+
+      <div class="row wide">
+        <label>
+          <input
+            type="checkbox"
+            .checked=${p.showLeaderLine !== false}
+            @change=${(e: Event) =>
+              this._updatePanel(p.id, {
+                showLeaderLine: (e.target as HTMLInputElement).checked ? undefined : false,
+              })}
+          />
+          Show connecting leader line to anchor
+        </label>
+      </div>
+
+      <div class="row wide">
+        <label>
+          <input
+            type="checkbox"
+            .checked=${p.showIn2D !== false}
+            @change=${(e: Event) =>
+              this._updatePanel(p.id, {
+                showIn2D: (e.target as HTMLInputElement).checked ? undefined : false,
+              })}
+          />
+          Visible in 2D top-down view
+        </label>
+      </div>
+
+      <div class="row wide">
+        <label>
+          <input
+            type="checkbox"
+            .checked=${p.showIn3D !== false}
+            @change=${(e: Event) =>
+              this._updatePanel(p.id, {
+                showIn3D: (e.target as HTMLInputElement).checked ? undefined : false,
+              })}
+          />
+          Visible in 3D perspective / stacked view
+        </label>
+      </div>
+
+      <div class="row wide">
+        <label>
+          <input
+            type="checkbox"
+            .checked=${p.showOnlyWhenZoomed === true}
+            @change=${(e: Event) =>
+              this._updatePanel(p.id, {
+                showOnlyWhenZoomed: (e.target as HTMLInputElement).checked ? true : undefined,
+              })}
+          />
+          Only show when room is zoomed into (uncluttered view)
+        </label>
+      </div>
+
+      <div class="row wide" style="margin-top: 10px; display: flex; justify-content: space-between; align-items: center;">
+        <label style="font-weight: bold;">Metrics</label>
+        <button
+          @click=${() =>
+            commitMetrics([
+              ...metrics,
+              { entity: "" },
+            ])}
+        >
+          <ha-icon icon="mdi:plus"></ha-icon> Add metric
+        </button>
+      </div>
+
+      ${metrics.map(
+        (m, i) => html`
+          <div class="row wide item-reading" style="display: flex; gap: 4px; align-items: center;">
+            ${this._renderEntityPicker(
+              m.entity ?? "",
+              (entity) => patchMetric(i, { entity: entity || undefined })
+            )}
+            ${this._renderAttributePicker(
+              m.entity,
+              m.attribute ?? "",
+              (attribute) => patchMetric(i, { attribute: attribute || undefined }),
+              "Attribute to display"
+            )}
+            <button
+              class="rule-remove"
+              aria-label="Remove metric"
+              title="Remove metric"
+              @click=${() => commitMetrics(metrics.filter((_, j) => j !== i))}
+            >
+              <ha-icon icon="mdi:close"></ha-icon>
+            </button>
+          </div>
+          <div class="row wide" style="display: flex; gap: 4px; margin-bottom: 6px;">
+            <input
+              type="text"
+              placeholder="Label"
+              title="Metric label"
+              style="flex: 1;"
+              .value=${m.label ?? ""}
+              @change=${(e: Event) =>
+                patchMetric(i, { label: (e.target as HTMLInputElement).value || undefined })}
+            />
+            <input
+              type="text"
+              placeholder="Unit"
+              title="Unit (e.g. °C, %, W)"
+              style="width: 50px;"
+              .value=${m.unit ?? ""}
+              @change=${(e: Event) =>
+                patchMetric(i, { unit: (e.target as HTMLInputElement).value || undefined })}
+            />
+            <input
+              type="text"
+              placeholder="mdi:icon"
+              title="Icon override (e.g. mdi:thermometer)"
+              style="flex: 1;"
+              .value=${m.icon ?? ""}
+              @change=${(e: Event) =>
+                patchMetric(i, { icon: (e.target as HTMLInputElement).value || undefined })}
+            />
+          </div>
+        `
+      )}
+    `;
   }
 
   /**
