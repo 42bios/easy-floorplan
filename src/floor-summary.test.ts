@@ -609,6 +609,18 @@ describe("resolvePanelMetrics", () => {
     expect(metrics[2]!.value).toBe("unavailable");
   });
 
+  it("leaves out a metric row that has no entity yet", () => {
+    const panel: FloorInfoPanel = {
+      id: "p1",
+      x: 0,
+      y: 0,
+      metrics: [{ entity: "sensor.a" }, { entity: "" }],
+    };
+    const hass = mockHass({ "sensor.a": { state: "1", attributes: {} } });
+    const rows = resolvePanelMetrics(panel, hass);
+    expect(rows.map((r) => r.entity)).toEqual(["sensor.a"]);
+  });
+
   it("reads custom attributes when attribute is configured", () => {
     const panel: FloorInfoPanel = {
       id: "panel_ac",

@@ -720,7 +720,9 @@ export function resolvePanelMetrics(
   if (!panel.metrics || !panel.metrics.length) return [];
   const states = hass?.states ?? {};
 
-  return panel.metrics.map((m) => {
+  // A row the editor has added but not yet given an entity is not a
+  // metric; leave it out rather than show it as unavailable.
+  return panel.metrics.filter((m) => !!m.entity).map((m) => {
     const st = states[m.entity];
     const attrs = st?.attributes ?? {};
     const unavailable = !st || st.state === "unavailable" || st.state === "unknown";
