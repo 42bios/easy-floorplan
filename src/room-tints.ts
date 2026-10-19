@@ -4,7 +4,7 @@
  * A plan whose rooms have no colour of their own draws every one of them in
  * the same accent wash, so the eye has nothing to tell one room from the next.
  * With the option on, each room without a `color` gets a soft tint from a short
- * built-in palette instead — chosen so that rooms sharing a wall never share a
+ * built-in palette instead — chosen so that rooms sharing a wall avoid sharing a
  * tint, and so that the same room keeps the same tint from one load to the
  * next.
  *
@@ -39,8 +39,9 @@
  * repaint an SVG fill (see the keyed() note in floorplan-card.ts).
  */
 
-import type { AreaPoint } from "./types";
+import type { AreaPoint, OutdoorZoneKind } from "./types";
 import { findSkin } from "./skins";
+import { outdoorZoneDefaultColor } from "./render";
 
 export interface RoomTint {
   /** Stable name, used in docs and tests. */
@@ -240,7 +241,7 @@ function distanceToRing(poly: readonly AreaPoint[], p: AreaPoint): number {
  * order rooms appear in the config. See the file comment for the rule.
  */
 export function assignRoomTints(
-  areas: readonly { id?: unknown; points?: unknown; color?: unknown }[],
+  areas: readonly { id?: unknown; points?: unknown; color?: unknown; zoneKind?: unknown }[],
   count = ROOM_TINTS.length
 ): (number | undefined)[] {
   const out: (number | undefined)[] = areas.map(() => undefined);
@@ -250,7 +251,11 @@ export function assignRoomTints(
       i,
       key: typeof a.id === "string" ? a.id : "",
       pts: finitePoints(a.points),
-      own: typeof a.color === "string" && a.color.trim() !== "",
+      // An outdoor zone's default colour counts as the area's own colour: a
+      // lawn stays lawn green, and its neighbours need not avoid a tint for it.
+      own:
+        (typeof a.color === "string" && a.color.trim() !== "") ||
+        outdoorZoneDefaultColor(a.zoneKind as OutdoorZoneKind | undefined) !== undefined,
     }))
     .filter((r) => !r.own);
   // Id order, so moving an entry in `areas:` changes nothing. Duplicate or
@@ -277,6 +282,24 @@ export function assignRoomTints(
   return out;
 }
 
+type RoomTintArea = { id?: unknown; points?: unknown; color?: unknown; zoneKind?: unknown; opacity?: unknown };
+
+const tintMemo = new WeakMap<readonly RoomTintArea[], (number | undefined)[]>();
+
+/**
+ * {@link assignRoomTints}, reused while the floor's `areas` array is the same
+ * one. Config arrays are replaced on edits, just as for deadSpacesCached, so
+ * this skips the pairwise adjacency check on renders that only move state.
+ */
+function assignRoomTintsCached(areas: readonly RoomTintArea[]): (number | undefined)[] {
+  let out = tintMemo.get(areas);
+  if (!out) {
+    out = assignRoomTints(areas);
+    tintMemo.set(areas, out);
+  }
+  return out;
+}
+
 /** What a tinted room rests at: the fill and opacity used when no live colour applies. */
 export interface RoomTintPaint {
   color: string;
@@ -289,12 +312,12 @@ export interface RoomTintPaint {
  * `undefined`; a room with its own `opacity` keeps that opacity.
  */
 export function roomTintPaints(
-  areas: readonly { id?: unknown; points?: unknown; color?: unknown; opacity?: unknown }[],
+  areas: readonly RoomTintArea[],
   mode: RoomTintsMode,
   scheme: RoomTintScheme
 ): (RoomTintPaint | undefined)[] {
   if (mode !== "auto") return areas.map(() => undefined);
-  const tints = assignRoomTints(areas);
+  const tints = assignRoomTintsCached(areas);
   return areas.map((a, i) => {
     const t = tints[i];
     if (t === undefined) return undefined;

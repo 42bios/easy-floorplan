@@ -96,6 +96,16 @@ describe("roomTints: auto reaches the paint", () => {
     expect(t.fills()[0]!.fill).toBe(ROOM_TINTS[expected[0]!]!.dark);
   });
 
+  it("follows a dark-mode switch on a live card", async () => {
+    const t = await mount(config({ roomTints: "auto" }), false);
+    expect(t.fills()[0]!.fill).toBe(ROOM_TINTS[expected[0]!]!.light);
+    // Same formatters, same states: only the theme moves, as when HA's auto
+    // theme turns dark at sunset.
+    t.card.hass = { ...t.card.hass, themes: { darkMode: true } } as FloorplanCard["hass"];
+    await t.card.updateComplete;
+    expect(t.fills()[0]!.fill).toBe(ROOM_TINTS[expected[0]!]!.dark);
+  });
+
   it("draws the dark side on a dark skin whatever HA's mode", async () => {
     const t = await mount(config({ roomTints: "auto", skin: "tron" }), false);
     expect(t.fills()[0]!.fill).toBe(ROOM_TINTS[expected[0]!]!.dark);

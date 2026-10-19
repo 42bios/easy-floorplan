@@ -177,6 +177,21 @@ describe("assignRoomTints", () => {
     expect(tints[0]).toBe(assignRoomTints([areas[0]!])[0]);
   });
 
+  it("treats an outdoor zone's default colour as its own colour", () => {
+    const areas = [
+      { id: "a", points: rect(0, 0, 100, 100) },
+      { id: "b", points: rect(100, 0, 100, 100), zoneKind: "lawn" },
+    ];
+    const tints = assignRoomTints(areas);
+    expect(tints[1]).toBeUndefined();
+    // The lawn claims no tint, so "a" is as free as if it stood alone.
+    expect(tints[0]).toBe(assignRoomTints([areas[0]!])[0]);
+  });
+
+  it("tints an indoor zone like any other room", () => {
+    expect(assignRoomTints([{ id: "a", points: rect(0, 0, 1, 1), zoneKind: "indoor" }])[0]).toBeDefined();
+  });
+
   it("treats an empty colour as no colour", () => {
     expect(assignRoomTints([{ id: "a", points: rect(0, 0, 1, 1), color: "  " }])[0]).toBeDefined();
   });
@@ -272,6 +287,14 @@ describe("roomTintPaints", () => {
     expect(c).toBeUndefined();
     expect(a!.color).toMatch(/^var\(--fp-room-tint-\d/);
     expect(a!.color).not.toBe(b!.color);
+  });
+
+  it("follows an edit, which replaces the areas array", () => {
+    const before = roomTintPaints(areas, "auto", "light");
+    const edited = areas.map((a) => (a.id === "a" ? { ...a, color: "#abcdef" } : a));
+    const after = roomTintPaints(edited, "auto", "light");
+    expect(before[0]).toBeDefined();
+    expect(after[0]).toBeUndefined();
   });
 
   it("draws the dark side of the same tint in dark mode", () => {

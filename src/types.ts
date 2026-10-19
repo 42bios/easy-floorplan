@@ -56,6 +56,8 @@ export interface RenderHass {
   states: Record<string, HassEntity | undefined>;
   formatEntityState(stateObj: HassEntity): string;
   formatEntityAttributeValue?(stateObj: HassEntity, attribute: string): string;
+  /** Read only for dark mode, which picks the side of every room tint. */
+  themes?: { darkMode?: boolean };
 }
 
 /** A straight wall segment in virtual coordinate space. */

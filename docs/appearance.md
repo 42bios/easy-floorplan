@@ -162,12 +162,14 @@ type: custom:easy-floorplan-card
 roomTints: auto
 ```
 
-Rooms that share a wall never share a tint, and a room keeps its tint from one load to the
+Rooms that share a wall avoid sharing a tint (only a room with eight or more tinted
+neighbours can't), and a room keeps its tint from one load to the
 next — it is picked from the room's id, moving on round the palette only when a neighbour
 already holds it. Adding a room elsewhere on the plan leaves the others alone; adding one
 beside a room can move that neighbour. Rooms meeting only at a corner count as apart.
 
-It only fills in a room's resting colour. A room with its own `color` keeps it, and a live
+It only fills in a room's resting colour. A room with its own `color` keeps it, as does an
+outdoor zone with a default colour (a `zoneKind: lawn` stays lawn green), and a live
 `stateColor` or `activeColor` still takes over the fill (or the outline, under
 `highlight: border`) exactly as without tints. A tinted room rests at `0.18` opacity unless
 it sets its own `opacity`. Line art stays white, and the 3D view tints the same floors.

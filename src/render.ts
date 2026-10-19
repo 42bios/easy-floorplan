@@ -132,6 +132,9 @@ export function hassRenderInputsChanged(
   // Both formatters, because a plan can be built entirely out of attribute
   // readings and would otherwise be watching a function it never calls.
   if (prev.formatEntityAttributeValue !== next.formatEntityAttributeValue) return true;
+  // Dark mode picks the light or dark side of every room tint, and HA flips it
+  // on a live card (an auto theme at sunset) without any entity changing.
+  if (prev.themes?.darkMode !== next.themes?.darkMode) return true;
   for (const id of watchedEntities) {
     if (prev.states[id] !== next.states[id]) return true;
   }

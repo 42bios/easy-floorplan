@@ -4401,6 +4401,21 @@ describe("renderArea", () => {
       expect(markup).toContain("fill-opacity=0.6");
     });
 
+    it("keeps an outdoor zone's default colour, as it would an explicit one", () => {
+      const markup = flattenMarkup(
+        renderArea({ id: "a", points: square, zoneKind: "lawn" }, undefined, tint)
+      );
+      expect(markup).toContain("fill=#4CAF50");
+      expect(markup).not.toContain("fill-opacity=0.18");
+    });
+
+    it("still tints an indoor zone, which has no default colour", () => {
+      const markup = flattenMarkup(
+        renderArea({ id: "a", points: square, zoneKind: "indoor" }, undefined, tint)
+      );
+      expect(markup).toContain(`fill=${tint.color}`);
+    });
+
     it("gives way to a live fill and its activeOpacity", () => {
       const a = { id: "a", points: square, activeOpacity: 0.5 };
       const markup = flattenMarkup(renderArea(a, "#4caf50", tint));
