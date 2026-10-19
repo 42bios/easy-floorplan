@@ -47,6 +47,26 @@ function nearestWall(point: AreaPoint, walls: readonly Wall[]) {
 }
 
 /**
+ * A wall end that stops short of another wall, but within that wall's
+ * thickness, looks joined on the plan. Join it here too: otherwise the room
+ * behind leaks to the outside through a slot nobody can see, and its interior
+ * openings read as sky sources (issue #360: a terrace wall 4 units short of the
+ * side wall). A real doorway is far wider than this tolerance.
+ */
+function joinWallEnds(walls: readonly Wall[]): Wall[] {
+  const joins: Wall[] = [];
+  walls.forEach((w, index) => {
+    const others = walls.filter(o => o !== w);
+    [{ x: w.x1, y: w.y1 }, { x: w.x2, y: w.y2 }].forEach((p, end) => {
+      const match = nearestWall(p, others);
+      if (!match || match.distance <= WELD_EPS || match.distance > OPENING_ON_WALL_EPS) return;
+      joins.push({ id: `ambient-join-${index}-${end}`, x1: p.x, y1: p.y, x2: match.point.x, y2: match.point.y });
+    });
+  });
+  return [...walls, ...joins];
+}
+
+/**
  * An explicit opening can close a run only when both jambs meet solid walls,
  * or another opening that does: a glazed bay is often two windows side by
  * side. A jamb gets the same nudge tolerance as an opening's centre. A gap
@@ -89,7 +109,7 @@ function sameRun(a: Wall, b: Wall): boolean {
 }
 
 function buildGeometry(walls: readonly Wall[], openings: readonly Opening[]) {
-  const closedWalls = bridgeOpenings(walls, openings);
+  const closedWalls = bridgeOpenings(joinWallEnds(walls), openings);
   const regions = traceRegions(closedWalls);
   const attached = openings.map(o => {
     if (openingIsSkylight(o)) return undefined;

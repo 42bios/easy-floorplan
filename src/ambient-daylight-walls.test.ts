@@ -99,6 +99,21 @@ describe("ambient daylight follows physical walls (#319)", () => {
       expect(result.map(light => light?.patch.openingId)).toEqual([window.id, "second", undefined]);
     });
 
+    // The reporter's plan: a railed terrace, glazed doors into the living
+    // room, a passage on to the hall. The terrace wall stops 4 units short of
+    // the side wall, inside its thickness, so the plan looks closed.
+    it("when a wall stops 4 units short of the next one", () => {
+      const terrace: Opening = { id: "terrace", type: "door", glazed: true, x: 200, y: 100, length: 80, angle: 0 };
+      const hall: Opening = { id: "hall", type: "passage", x: 200, y: 200, length: 60, angle: 0 };
+      const plan = (short: number) => [...outer.slice(1), { ...outer[0]!, kind: "railing" as const },
+        { id: "terrace-wall", x1: 0, y1: 100, x2: 400 - short, y2: 100 },
+        { id: "hall-wall", x1: 0, y1: 200, x2: 400, y2: 200 }];
+      const joined = lights(plan(0), [terrace, hall], 1)!;
+      const result = lights(plan(4), [terrace, hall], 1)!;
+      expect(result.map(light => light?.patch.openingId)).toEqual([terrace.id, undefined]);
+      expect(result[0]!.patch.gradientEnd).toEqual(joined[0]!.patch.gradientEnd);
+    });
+
     it.each([3, 5])("when the window is nudged %s units off a solid wall", (offset) => {
       const expected = lights([...outer, partition], [window, passage], 1)![0]!.patch;
       for (const x of [-offset, offset]) {
