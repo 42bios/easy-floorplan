@@ -1101,6 +1101,7 @@ export type FurnitureType =
   | "chair"
   | "sofa"
   | "bed"
+  | "bunkBed"
   | "wardrobe"
   | "dresser"
   | "tallDresser"
@@ -1318,6 +1319,37 @@ export type RectAreaSideWallState = "none" | "wall" | "divider";
 export type RectAreaSideWalls = Partial<Record<RectAreaSide, RectAreaSideWallState>>;
 
 /**
+ * Architectural style of a roof structure.
+ */
+export type RoofType = "flat" | "gable" | "hip" | "shed";
+
+/**
+ * A 3D roof structure defined on a floor.
+ */
+export interface Roof {
+  id: string;
+  type: RoofType;
+  /** Vertices in drawing order, virtual canvas units. Implicitly closed. */
+  points: AreaPoint[];
+  /** Ridge height above eaves in canvas units (like wallHeight). */
+  height: number;
+  /** Optional overhang distance past perimeter. Default 0. */
+  overhang?: number;
+  /** Optional surface color. */
+  color?: string;
+  /** Which side is pitched high for a shed (mono-pitch) roof. Reuses RectAreaSide. */
+  highSide?: RectAreaSide;
+  /** Optional ridge orientation override (horizontal vs vertical) for square or custom footprints. */
+  ridge?: "horizontal" | "vertical";
+  /** Optional custom elevation Z offset (for posts/custom placement). Defaults to floor wall top. */
+  elevation?: number;
+  /** Locked state in editor. */
+  locked?: boolean;
+}
+
+export type OutdoorZoneKind = "indoor" | "lawn" | "patio" | "pool" | "terrace" | "driveway" | "garden" | "courtyard";
+
+/**
  * A named room polygon, drawn point-by-point in the editor and closed by
  * clicking back on the starting vertex. Distinct from a {@link Floor} (a
  * whole level/story) the same way Home Assistant's own "area" (room) sits
@@ -1329,6 +1361,8 @@ export interface Area {
   points: AreaPoint[];
   /** Display name. Mirrors the linked HA area's name when `haArea` is set. */
   name?: string;
+  /** Categorizes the area type (e.g. indoor room vs outdoor lawn, patio, pool, driveway). */
+  zoneKind?: OutdoorZoneKind;
   /** Show the name label on the plan, centered on the polygon. Default true. */
   showName?: boolean;
   /**
@@ -1643,6 +1677,13 @@ export const FURNITURE_COLOR = "var(--fp-skin-furniture, #9e9e9e)";
 export interface Floor {
   id: string;
   name: string;
+  /** Whether this floor represents an outdoor courtyard area. */
+  isOutdoor?: boolean;
+  /**
+   * Explicit level number for 3D stacking (0 for ground floor, 1 for 1st floor, -1 for basement).
+   * When omitted, defaults to Home Assistant's floor level or its relative order in the floor list.
+   */
+  level?: number;
   /**
    * Optional link to a Home Assistant floor (its registry `floor_id`).
    * Selecting one in the editor names this floor after it; the id is kept so
@@ -1692,6 +1733,7 @@ export interface Floor {
   furniture: Furniture[];
   trackers: Tracker[];
   areas: Area[];
+  roofs?: Roof[];
 }
 
 /** Sizing mode for the HTML overlay layer. See {@link FloorplanCardConfig.overlayScale}. */
@@ -2173,6 +2215,7 @@ export interface FloorplanCardConfig extends LovelaceCardConfig {
   furniture?: Furniture[];
   trackers?: Tracker[];
   areas?: Area[];
+  roofs?: Roof[];
   /**
    * Symbols this plan defines for itself (issue #90), keyed by id and merged
    * over the shipped `furniture/` library — so you can draw a piece nobody has
@@ -2422,6 +2465,7 @@ export function makeFloor(name: string, walls: Wall[] = []): Floor {
     furniture: [],
     trackers: [],
     areas: [],
+    roofs: [],
   };
 }
 
@@ -2441,7 +2485,37 @@ function normalizeFloor(f: Floor): Floor {
     furniture: f.furniture ?? [],
     trackers: f.trackers ?? [],
     areas: f.areas ?? [],
+    roofs: f.roofs ?? [],
   };
+}
+
+/**
+ * Extract all roofs for a floor.
+ */
+export function getFloorRoofs(f: Floor): Roof[] {
+  return f.roofs ?? [];
+}
+
+/**
+ * Determine the vertical storey level (Z index) for a floor.
+ * Prioritizes an explicit `level` on the floor, falls back to Home Assistant registry level,
+ * and finally defaults to 0-based index among indoor floors.
+ */
+export function resolveFloorLevel(f: Floor, allFloors: readonly Floor[], hass?: unknown): number {
+  if (typeof f.level === "number" && !isNaN(f.level)) {
+    return f.level;
+  }
+  if (f.haFloor !== undefined && f.haFloor !== "") {
+    const haFloors = haFloorsOf(hass);
+    const haMatch = haFloors.find((h) => h.floor_id === f.haFloor);
+    if (haMatch?.level != null) {
+      return haMatch.level;
+    }
+  }
+  const indoorFloors = allFloors.filter((fl) => !fl.isOutdoor);
+  const idx = indoorFloors.findIndex((fl) => fl.id === f.id);
+  if (idx !== -1) return idx;
+  return 0;
 }
 
 /**
@@ -2501,6 +2575,7 @@ export function getFloors(c: FloorplanCardConfig): Floor[] {
       furniture: c.furniture ?? [],
       trackers: c.trackers ?? [],
       areas: c.areas ?? [],
+      roofs: c.roofs ?? [],
     },
   ];
 }

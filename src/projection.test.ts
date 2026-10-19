@@ -4,6 +4,7 @@ import { rotatePlanPoint, areaZoomTransform, type PlanRotation } from "./render"
 import {
   DEFAULT_WALL_HEIGHT,
   MAX_WALL_HEIGHT,
+  OUTDOOR_WALL_HEIGHT_MULTIPLIER,
   ISO_CHUNK,
   SILL_FRACTION,
   GLASS_FRACTION,
@@ -23,10 +24,12 @@ import {
   wallHeadroom,
   furnitureSolid,
   solidDepth,
+  roofSolids,
   renderIsoSolids,
   type DisplayFrame,
   type IsoSolid,
 } from "./projection";
+import type { Roof } from "./types";
 
 // Interleave a template's strings and values, recursively. Values land
 // unquoted, so assertions read `data-id=w1`, not `data-id="w1"`.
@@ -103,6 +106,10 @@ describe("wallStandingHeight and wallHeadroom", () => {
     // With headroom = 140, y coordinate does not go negative (stays inside canvas at padding)
     expect(topOfWall.y).toBeCloseTo(14, 6);
   });
+  it("provides 2.5x multiplier for 3D outdoor area full wall height rendering", () => {
+    expect(OUTDOOR_WALL_HEIGHT_MULTIPLIER).toBe(2.5);
+    expect(DEFAULT_WALL_HEIGHT * OUTDOOR_WALL_HEIGHT_MULTIPLIER).toBe(150);
+  });
 });
 
 describe("projectedCanvasSize", () => {
@@ -113,6 +120,10 @@ describe("projectedCanvasSize", () => {
     const d = projectedCanvasSize(iso());
     expect(d.w).toBeCloseTo(1600 * COS, 6);
     expect(d.h).toBeCloseTo(800 + 60, 6);
+  });
+  it("includes lowerDepth for lower levels beneath the base elevation", () => {
+    const d = projectedCanvasSize({ ...iso(), lowerDepth: 90 });
+    expect(d.h).toBeCloseTo(800 + 60 + 90, 6);
   });
 });
 
@@ -291,6 +302,20 @@ describe("wallSolids", () => {
   it("draws nothing for a wall with no length", () => {
     expect(wallSolids([{ id: "w0", x1: 5, y1: 5, x2: 5, y2: 5, thickness: 8 }], [], H)).toHaveLength(0);
   });
+  it("renders a wall interval above windows and doors when wall height is full height (> DEFAULT_WALL_HEIGHT)", () => {
+    const door = { x: 100, y: 0, length: 40, angle: 0, type: "door" as const };
+    const fullHeight = 150;
+    const solids = wallSolids([wall], [door], fullHeight);
+    const headers = solids.filter((s) => s.kind === "wall" && s.z0 === fullHeight * GLASS_FRACTION && s.z1 === fullHeight);
+    expect(headers.length).toBeGreaterThan(0);
+    expect(headers[0].base.some((p) => p.x >= 80 && p.x <= 120)).toBe(true);
+
+    const window = { x: 100, y: 0, length: 40, angle: 0, type: "window" as const };
+    const winSolids = wallSolids([wall], [window], fullHeight);
+    const winHeaders = winSolids.filter((s) => s.kind === "wall" && s.z0 === fullHeight * GLASS_FRACTION && s.z1 === fullHeight);
+    expect(winHeaders.length).toBeGreaterThan(0);
+  });
+
   it("stands a railing at half height while keeping a passage gap", () => {
     const rail = { ...wall, kind: "railing" as const, thickness: 3.2 };
     const solids = wallSolids([rail], [{ x: 100, y: 0, length: 40, angle: 0, type: "passage" }], H);
@@ -298,13 +323,18 @@ describe("wallSolids", () => {
     expect(solids.every(s => s.kind === "railing" && s.z1 === H / 2)).toBe(true);
     for (const x of xs(solids)) expect(x <= 80 + 1e-9 || x >= 120 - 1e-9).toBe(true);
   });
-  it("renders a wall header above openings when wall height is taller than DEFAULT_WALL_HEIGHT", () => {
-    const door = { x: 100, y: 0, length: 40, angle: 0, type: "door" as const };
-    const fullHeight = 150;
-    const solids = wallSolids([wall], [door], fullHeight);
-    const headers = solids.filter((s) => s.kind === "wall" && s.z0 === fullHeight * GLASS_FRACTION && s.z1 === fullHeight);
-    expect(headers.length).toBeGreaterThan(0);
-    expect(headers[0].base.some((p) => p.x >= 80 && p.x <= 120)).toBe(true);
+  it("preserves small wall stubs on indoor plans and omits <= 2px on outdoor plans", () => {
+    const w = { id: "w_stub", x1: 0, y1: 0, x2: 100, y2: 0, thickness: 8 };
+    // Door centered at 59 with length 80 spans 19 to 99 (leaves 1px <= 2px at end)
+    const d = { x: 59, y: 0, length: 80, angle: 0, type: "door" as const };
+    const indoorSolids = wallSolids([w], [d], H, false, false);
+    const indoorWallPieces = indoorSolids.filter((s) => s.kind === "wall");
+    expect(indoorWallPieces).toHaveLength(2);
+
+    const outdoorSolids = wallSolids([w], [d], H, false, true);
+    const outdoorWallPieces = outdoorSolids.filter((s) => s.kind === "wall");
+    expect(outdoorWallPieces).toHaveLength(1);
+    expect(Math.max(...outdoorWallPieces[0]!.base.map((p) => p.x))).toBeCloseTo(19, 1);
   });
   it("normalizes unparseable and out-of-range wall heights in wallSolids", () => {
     const negWall = { id: "w_neg", x1: 0, y1: 0, x2: 100, y2: 0, thickness: 8, height: -30 };
@@ -539,3 +569,195 @@ describe("3D framing and opacity", () => {
     expect(normalizeWallOpacity(2)).toBe(1);
   });
 });
+
+describe("roofSolids", () => {
+  const mapIdentity = (x: number, y: number) => ({ x, y });
+  const points = [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }];
+
+  it("generates flat roof solid", () => {
+    const roof: Roof = { id: "r1", points, type: "flat", elevation: 60, height: 12, color: "#ff0000" };
+    const solids = roofSolids([roof], mapIdentity, 60);
+    expect(solids).toHaveLength(1);
+    expect(solids[0].kind).toBe("roof");
+    expect(solids[0].z0).toBe(60);
+    expect(solids[0].z1).toBe(72);
+    expect(solids[0].color).toBe("#ff0000");
+  });
+
+  it("generates hip roof solids", () => {
+    const roof: Roof = { id: "r1", points, type: "hip", elevation: 60, height: 40 };
+    const solids = roofSolids([roof], mapIdentity, 60);
+    expect(solids).toHaveLength(4);
+    expect(solids.every((s) => s.kind === "roof" && s.z0 === 60 && s.z1 === 100)).toBe(true);
+  });
+
+  it("generates shed roof solids with pitch side options", () => {
+    for (const side of ["top", "bottom", "left", "right"] as const) {
+      const roof: Roof = { id: "r1", points, type: "shed", highSide: side, elevation: 60, height: 30 };
+      const solids = roofSolids([roof], mapIdentity, 60);
+      expect(solids.length).toBeGreaterThanOrEqual(2);
+      expect(solids.some((s) => s.vertices !== undefined)).toBe(true);
+    }
+  });
+
+  it("generates gable roof solids", () => {
+    const roof: Roof = { id: "r1", points, type: "gable", elevation: 60, height: 30 };
+    const solids = roofSolids([roof], mapIdentity, 60);
+    expect(solids.length).toBeGreaterThanOrEqual(2);
+    expect(solids.every((s) => s.kind === "roof")).toBe(true);
+  });
+
+  it("supports dedicated Roof objects", () => {
+    const roof: Roof = {
+      id: "r1",
+      type: "shed",
+      points,
+      height: 40,
+      elevation: 50,
+      highSide: "top",
+      overhang: 5,
+      color: "#336699",
+    };
+    const solids = roofSolids([roof], mapIdentity, 60);
+    expect(solids.length).toBeGreaterThanOrEqual(2);
+    expect(solids[0].color).toBe("#336699");
+    // Verify highSide === "top" slopes up to North (min-Y / top edge)
+    const slope = solids.find((s) => s.vertices !== undefined);
+    expect(slope).toBeDefined();
+    // North vertices (y = minY - overhang = -5) should have peak elevation 50 + 40 = 90
+    const northVertices = slope!.vertices!.filter((v) => v.y === -5);
+    expect(northVertices).toHaveLength(2);
+    expect(northVertices.every((v) => v.z === 90)).toBe(true);
+    // South vertices (y = maxY + overhang = 105) should have base elevation 50
+    const southVertices = slope!.vertices!.filter((v) => v.y === 105);
+    expect(southVertices).toHaveLength(2);
+    expect(southVertices.every((v) => v.z === 50)).toBe(true);
+  });
+
+  it("respects ridge orientation override on gable roof", () => {
+    // 200 wide x 100 tall rectangle: auto ridge would be horizontal (along longer X side)
+    const widePoints = [{ x: 0, y: 0 }, { x: 200, y: 0 }, { x: 200, y: 100 }, { x: 0, y: 100 }];
+    const roofVert: Roof = {
+      id: "r_vert",
+      type: "gable",
+      points: widePoints,
+      height: 30,
+      ridge: "vertical",
+    };
+    const solids = roofSolids([roofVert], mapIdentity, 60);
+    expect(solids.length).toBe(4);
+    // For vertical ridge, ridge runs along Y at mid-X (x = 100), splitting into left and right slopes
+    const slope0 = solids[0];
+    expect(slope0.base.some((p) => p.x === 100)).toBe(true);
+  });
+
+  it("sanitises hostile roof colour and falls back to default (#8d6e63)", () => {
+    const roof: Roof = {
+      id: "r1",
+      points,
+      type: "flat",
+      elevation: 60,
+      height: 12,
+      color: "red;position:fixed;inset:0;z-index:99999;background-image:url(https://evil.example/x)",
+    };
+    const solids = roofSolids([roof], mapIdentity, 60);
+    expect(solids[0].color).toBe("#8d6e63");
+    const html = flatten(renderIsoSolids(solids));
+    expect(html).not.toContain("position:fixed");
+    expect(html).not.toContain("evil.example");
+    expect(html).toContain("--fp-iso-color:#8d6e63");
+  });
+
+  it("sanitises hostile roof colour for pitched roofs in renderIsoSolids", () => {
+    const roof: Roof = {
+      id: "r1",
+      points,
+      type: "gable",
+      elevation: 60,
+      height: 30,
+      color: "red;position:fixed;inset:0",
+    };
+    const solids = roofSolids([roof], mapIdentity, 60);
+    expect(solids.every((s) => s.color === "#8d6e63")).toBe(true);
+    const html = flatten(renderIsoSolids(solids));
+    expect(html).not.toContain("position:fixed");
+    expect(html).toContain("--fp-iso-color:#8d6e63");
+  });
+
+  it("renders IsoSolid with opacity in renderIsoSolids", () => {
+    const solid: IsoSolid = {
+      kind: "roof",
+      id: "slab_curte",
+      base: [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }],
+      z0: -6,
+      z1: 0,
+      color: "#f7fbfd",
+      opacity: 1,
+    };
+    const html = flatten(renderIsoSolids([solid]));
+    expect(html).toContain("opacity:1");
+    expect(html).toContain("--fp-iso-color:#f7fbfd");
+  });
+
+  it("renders IsoSolid with partial opacity", () => {
+    const solid: IsoSolid = {
+      kind: "roof",
+      id: "slab_garden",
+      base: [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }],
+      z0: -6,
+      z1: 0,
+      color: "#06f202",
+      opacity: 0.5,
+    };
+    const html = flatten(renderIsoSolids([solid]));
+    expect(html).toContain("opacity:0.5");
+    expect(html).toContain("--fp-iso-color:#06f202");
+  });
+
+  it("resolves equal-area intersecting gable roof pair without duplicate faces", () => {
+    // Symmetrical plus-shaped intersection: two 200x40 gables, both with area 8000
+    // g1 runs horizontally along X (0..200, 80..120) with ridge at y=100
+    // g2 runs vertically along Y (80..120, 0..200) with ridge at x=100
+    const g1: Roof = {
+      id: "g1",
+      type: "gable",
+      points: [{ x: 0, y: 80 }, { x: 200, y: 80 }, { x: 200, y: 120 }, { x: 0, y: 120 }],
+      height: 30,
+    };
+    const g2: Roof = {
+      id: "g2",
+      type: "gable",
+      points: [{ x: 80, y: 0 }, { x: 120, y: 0 }, { x: 120, y: 200 }, { x: 80, y: 200 }],
+      height: 30,
+    };
+    const solids = roofSolids([g1, g2], mapIdentity, 60);
+    // Exactly one gable becomes main and generates 8 intersecting solids, avoiding duplicates
+    expect(solids).toHaveLength(8);
+    expect(solids.every((s) => s.kind === "roof")).toBe(true);
+  });
+
+  it("sets valley point elevation from cross-gable eaves when elevations differ", () => {
+    // Main gable at elevation 60, cross-gable at lower elevation 40
+    const mainGable: Roof = {
+      id: "main",
+      type: "gable",
+      points: [{ x: 0, y: 80 }, { x: 240, y: 80 }, { x: 240, y: 140 }, { x: 0, y: 140 }],
+      elevation: 60,
+      height: 30,
+    };
+    const crossGable: Roof = {
+      id: "cross",
+      type: "gable",
+      points: [{ x: 80, y: 100 }, { x: 140, y: 100 }, { x: 140, y: 200 }, { x: 80, y: 200 }],
+      elevation: 40,
+      height: 25,
+    };
+    const solids = roofSolids([mainGable, crossGable], mapIdentity, 60);
+    expect(solids.length).toBeGreaterThan(0);
+    // Find the cross-gable front faces and verify they use cross-gable's eaves elevation (40)
+    const crossSolids = solids.filter((s) => s.id === "cross");
+    expect(crossSolids.length).toBeGreaterThanOrEqual(3);
+    expect(crossSolids.some((s) => s.z0 === 40)).toBe(true);
+  });
+});
+
