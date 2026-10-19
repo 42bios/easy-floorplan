@@ -78,4 +78,28 @@ describe("floor callout panels in real chromium", () => {
     const rows = root.querySelectorAll(".fp-panel-metric-row");
     expect(rows.length).toBe(2);
   });
+
+  it("renders readable light background and dark ink text in line-art mode", async () => {
+    const panel: FloorInfoPanel = {
+      id: "panel_line_art",
+      x: 300,
+      y: 150,
+      title: "Solar Inverter",
+      style: "tech",
+      metrics: [{ entity: "sensor.power", label: "Solar Output" }],
+    };
+
+    const { root } = await mount({ panels: [panel] }, { appearance: "line-art" });
+
+    const panelEl = root.querySelector<HTMLElement>(".fp-info-panel.tech");
+    expect(panelEl).not.toBeNull();
+
+    const cs = getComputedStyle(panelEl!);
+    // Background must be crisp white and text must be ink dark
+    expect(cs.backgroundColor).toBe("rgb(255, 255, 255)");
+    expect(cs.color).toBe("rgb(40, 52, 62)");
+
+    const titleEl = root.querySelector<HTMLElement>(".fp-panel-title");
+    expect(getComputedStyle(titleEl!).color).toBe("rgb(40, 52, 62)");
+  });
 });
