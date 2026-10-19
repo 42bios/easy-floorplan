@@ -216,11 +216,71 @@ describe("hiding the furniture action icon (#362)", () => {
     expect(actions).toHaveLength(1);
   });
 
+  it("keyboard focus draws a ring around the hidden piece", async () => {
+    const card = await mount("2d", { tap_action: fire, showIcon: false, angle: 30 });
+    const g = glyph(card)!;
+    const ring = g.querySelector<SVGRectElement>(".fp-furniture-focus")!;
+    expect(getComputedStyle(ring).display).toBe("none");
+    g.focus();
+    await userEvent.keyboard("{Shift}");
+    expect(getComputedStyle(ring).display).not.toBe("none");
+    expect(getComputedStyle(ring).stroke).not.toBe("none");
+    // Around the drawing, not under it: the ring encloses the piece.
+    const box = ring.getBoundingClientRect();
+    const drawn = g.querySelector(".fp-furniture")!.getBoundingClientRect();
+    expect(box.left).toBeLessThanOrEqual(drawn.left);
+    expect(box.right).toBeGreaterThanOrEqual(drawn.right);
+    expect(getComputedStyle(ring).pointerEvents).toBe("none");
+  });
+
   it("a hidden hold-only piece is not a tab stop", async () => {
     const card = await mount("2d", { hold_action: fire, showIcon: false });
     const g = glyph(card)!;
     expect(g.getAttribute("role")).toBe("group");
     expect(g.hasAttribute("tabindex")).toBe(false);
+  });
+
+  it("3D house view: roofs and the house beside a hidden piece leave its drawing tappable", async () => {
+    const card = document.createElement("easy-floorplan-card");
+    card.style.display = "block";
+    card.style.width = "400px";
+    const seq = Math.random().toString(36).slice(2);
+    const box = (x0: number, y0: number, x1: number, y1: number) =>
+      [{ x: x0, y: y0 }, { x: x1, y: y0 }, { x: x1, y: y1 }, { x: x0, y: y1 }];
+    const empty = { openings: [], items: [], trackers: [], texts: [] };
+    card.setConfig({
+      type: "custom:easy-floorplan-card", width: 500, height: 400, view: "3d", wallHeight: 60,
+      defaultFloor: `garden-${seq}`,
+      floors: [
+        {
+          // An indoor storey behind the piece, with its own roof.
+          id: `house-${seq}`, name: "House", level: 0, ...empty, furniture: [],
+          walls: [
+            { id: "w1", x1: 20, y1: 20, x2: 180, y2: 20 }, { id: "w2", x1: 180, y1: 20, x2: 180, y2: 120 },
+            { id: "w3", x1: 180, y1: 120, x2: 20, y2: 120 }, { id: "w4", x1: 20, y1: 120, x2: 20, y2: 20 },
+          ],
+          areas: [{ id: "hall", points: box(20, 20, 180, 120) }],
+          roofs: [{ id: "house-roof", type: "gable", points: box(20, 20, 180, 120) }],
+        },
+        {
+          id: `garden-${seq}`, name: "Garden", isOutdoor: true, ...empty, walls: [],
+          areas: [{ id: "lawn", points: box(0, 0, 500, 400) }],
+          // A shed roof beside the piece.
+          roofs: [{ id: "shed", type: "shed", points: box(380, 40, 480, 140) }],
+          furniture: [{ id: "table", type: "table", x: 220, y: 260, w: 130, h: 90, tap_action: fire, showIcon: false }],
+        },
+      ],
+    } as unknown as FloorplanCardConfig);
+    card.hass = { states: {}, entities: {} } as FloorplanCard["hass"];
+    document.body.append(card);
+    await card.updateComplete;
+    await new Promise(requestAnimationFrame);
+    expect(card.shadowRoot!.querySelector(".fp-iso-roof")).not.toBeNull();
+    const actions = recordActions(card);
+    expect(icon(card)).toBeNull();
+    const target = await clickSurface(card);
+    expect(target.closest(".fp-furniture-hit")).toBe(glyph(card));
+    expect(actions).toHaveLength(1);
   });
 
   it("a hidden staircase still changes floor when tapped", async () => {

@@ -239,6 +239,9 @@ import { createReplayPanelProps, renderReplayPanel } from "./replay-history/repl
  */
 const lastViewedFloor = new Map<string, string>();
 
+/** Canvas units between a hidden-icon piece and its keyboard focus ring (#362). */
+const FURNITURE_FOCUS_PAD = 3;
+
 /** Content key for {@link lastViewedFloor} — the plan's floor ids, in order. */
 function floorMemoryKey(floors: readonly Floor[]): string {
   return floors.map((f) => f.id).join("|");
@@ -1424,6 +1427,11 @@ export class FloorplanCard extends LitElement {
         .actionHandler=${actionHandler({ hasHold: ctl.hasHold, hasDoubleClick: ctl.hasDoubleClick })}>
       <title>${`${ctl.name} · ${ctl.gestures}`}</title>
       ${drawn}
+      <rect class="fp-furniture-focus" aria-hidden="true"
+          x=${-f.w / 2 - FURNITURE_FOCUS_PAD} y=${-f.h / 2 - FURNITURE_FOCUS_PAD}
+          width=${f.w + FURNITURE_FOCUS_PAD * 2} height=${f.h + FURNITURE_FOCUS_PAD * 2}
+          rx=${FURNITURE_FOCUS_PAD}
+          transform="translate(${f.x} ${f.y}) rotate(${f.angle ?? 0})" />
     </g>`;
   }
 
@@ -2837,9 +2845,18 @@ export class FloorplanCard extends LitElement {
     /* A piece whose icon is hidden (issue #362): the drawing is the target. */
     .fp-furniture-hit { cursor: pointer; outline: none; }
     .fp-furniture-hit .fp-furniture { pointer-events: auto; }
-    .fp-furniture-hit:focus-visible .fp-furniture {
-      outline: 2px solid var(--fp-skin-text, var(--primary-text-color, #212121));
+    /* CSS outline on an SVG <g> is not painted reliably, so keyboard focus
+       draws a stroked box around the piece instead: 2 screen pixels at any
+       canvas scale. */
+    .fp-furniture-focus {
+      display: none;
+      fill: none;
+      stroke: var(--fp-skin-text, var(--primary-text-color, #212121));
+      stroke-width: 2;
+      vector-effect: non-scaling-stroke;
+      pointer-events: none;
     }
+    .fp-furniture-hit:focus-visible .fp-furniture-focus { display: inline; }
     .fp-furniture-link:focus-visible {
       outline: 2px solid var(--fp-skin-text, var(--primary-text-color, #212121));
       outline-offset: 2px;
