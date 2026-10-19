@@ -415,7 +415,7 @@ describe("computeFloorSummary", () => {
     const hass = mockHass({
       "sensor.living_temp": { state: "21.0", attributes: { unit_of_measurement: "°C" } },
       "sensor.kitchen_temp": { state: "22.0", attributes: { unit_of_measurement: "°C" } },
-      "sensor.living_humidity": { state: "50", attributes: { unit_of_measurement: "%" } },
+      "sensor.living_humidity": { state: "50", attributes: { device_class: "humidity", unit_of_measurement: "%" } },
       "binary_sensor.motion": { state: "on", attributes: { device_class: "motion" } },
       "light.ceiling": { state: "on", attributes: {} },
       "binary_sensor.front_window": { state: "on", attributes: { device_class: "window" } },
@@ -439,6 +439,47 @@ describe("computeFloorSummary", () => {
 
     expect(summary.badgeText).toBe("21.5°C · 50% · 👤 · 💡 1 · 🪟 1");
     expect(summary.tooltip).toContain("Living Floor: Average Temp 21.5°C, Humidity 50%");
+  });
+
+  it("ignores a probe's battery sensor whose name contains 'temperature'", () => {
+    const floor: Floor = {
+      ...makeFloor("Ground"),
+      items: [
+        { id: "a", kind: "sensor", entity: "sensor.living_temperature", x: 10, y: 10 },
+        { id: "b", kind: "sensor", entity: "sensor.living_temperature_battery", x: 20, y: 10 },
+      ],
+    };
+    const hass = mockHass({
+      "sensor.living_temperature": { state: "21", attributes: { device_class: "temperature", unit_of_measurement: "°C" } },
+      "sensor.living_temperature_battery": {
+        state: "85",
+        attributes: { device_class: "battery", unit_of_measurement: "%", friendly_name: "Living Temperature Battery" },
+      },
+    });
+    const summary = computeFloorSummary(floor, hass, { enabled: true });
+    expect(summary.temperature.formatted).toBe("21.0°C");
+    expect(summary.temperature.entityIds).toEqual(["sensor.living_temperature"]);
+    expect(summary.humidity.count).toBe(0);
+  });
+
+  it("does not treat name matches as humidity or presence", () => {
+    const floor: Floor = {
+      ...makeFloor("Ground"),
+      items: [
+        { id: "a", kind: "sensor", entity: "sensor.dehumidifier_tank_level", x: 10, y: 10 },
+        { id: "b", kind: "sensor", entity: "binary_sensor.motion_sensor_tamper", x: 20, y: 10 },
+        { id: "c", kind: "sensor", entity: "sensor.office_humidity", x: 30, y: 10 },
+      ],
+    };
+    const hass = mockHass({
+      "sensor.dehumidifier_tank_level": { state: "90", attributes: { unit_of_measurement: "%" } },
+      "binary_sensor.motion_sensor_tamper": { state: "on", attributes: { device_class: "tamper" } },
+      "sensor.office_humidity": { state: "40", attributes: { device_class: "humidity", unit_of_measurement: "%" } },
+    });
+    const detected = detectFloorSensors(floor, hass);
+    expect(detected.humidity).toEqual(["sensor.office_humidity"]);
+    expect(detected.presence).toEqual([]);
+    expect(detected.temperature).toEqual([]);
   });
 
   it("honors explicit entity overrides", () => {

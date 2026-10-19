@@ -236,44 +236,35 @@ export function detectFloorSensors(floor: Floor, hass: RenderHass | undefined): 
     const devClass = attrs.device_class as string | undefined;
     const unit = attrs.unit_of_measurement as string | undefined;
     const domain = entityId.split(".")[0];
-    const lowerId = entityId.toLowerCase();
-    const friendlyName = (attrs.friendly_name as string | undefined)?.toLowerCase() ?? "";
 
-    // Temperature detection
+    // Temperature detection: trust the device class and a temperature unit
+    // only. A name match ("temp") also catches a probe's own battery or
+    // signal sensor, which then gets averaged into the floor temperature.
     const isTemp =
-      devClass === "temperature" ||
-      (unit && ["°c", "°f", "k", "c", "f"].includes(unit.toLowerCase().trim())) ||
-      (domain === "sensor" && (lowerId.includes("temp") || friendlyName.includes("temp"))) ||
-      domain === "climate";
+      domain === "climate" ||
+      (domain === "sensor" &&
+        (devClass === "temperature" || normalizeTempUnit(unit) !== undefined));
 
     if (isTemp) {
       result.temperature.push(entityId);
     }
 
-    // Humidity detection
+    // Humidity detection: device class only, for the same reason (a "%" with
+    // "humid" in the name can be a battery or a dehumidifier setting).
     const isHumid =
-      devClass === "humidity" ||
-      (unit === "%" && (lowerId.includes("humid") || friendlyName.includes("humid"))) ||
+      (domain === "sensor" && devClass === "humidity") ||
       (domain === "climate" && attrs.current_humidity !== undefined);
 
     if (isHumid) {
       result.humidity.push(entityId);
     }
 
-    // Presence / occupancy detection
+    // Presence / occupancy detection: device class or a presence domain.
     const isPresence =
-      devClass === "occupancy" ||
-      devClass === "motion" ||
-      devClass === "presence" ||
-      domain === "person" ||
-      domain === "device_tracker" ||
       (domain === "binary_sensor" &&
-        (lowerId.includes("motion") ||
-          lowerId.includes("occupan") ||
-          lowerId.includes("presence") ||
-          friendlyName.includes("motion") ||
-          friendlyName.includes("occupan") ||
-          friendlyName.includes("presence")));
+        (devClass === "occupancy" || devClass === "motion" || devClass === "presence")) ||
+      domain === "person" ||
+      domain === "device_tracker";
 
     if (isPresence) {
       result.presence.push(entityId);
