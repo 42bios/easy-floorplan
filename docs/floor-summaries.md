@@ -34,11 +34,30 @@ floors:
 ```
 
 ### Automatic Sensor Discovery
-If you don't configure explicit helper entities, the card automatically discovers candidate sensors on each floor:
-- **Room / Area linkage**: Scans all rooms on the floor linked to Home Assistant areas (`area.haArea`) or entity trackers.
-- **Floor-level linkage**: Scans Home Assistant areas belonging to the floor's Home Assistant Floor (`floor.haFloor`).
-- **Averaging & Unit Conversion**: Aggregates all temperature and humidity sensors on the floor, automatically reconciling mixed units (°C and °F) and rounding to your configured `decimals`.
-- **Active State Tally**: Counts occupied rooms / detected persons (`👤 N`), lights currently on (`💡 N`), and open windows or doors (`🪟 N`).
+A helper entity (`temperatureEntity`, `humidityEntity`, `presenceEntity`) always wins. A dedicated Home Assistant helper, such as a Min/Max sensor averaging the floor's thermometers, is the recommended way to set the floor's figure. Without one, the card looks for candidate sensors on the floor:
+- **On the plan**: entities on items, readings, openings, trackers, rooms and panels of that floor.
+- **Room / Area linkage**: every entity in the Home Assistant area linked to a room (`area.haArea`), including entities whose device is in that area.
+- **Floor-level linkage**: every entity in the Home Assistant areas on the floor's linked Home Assistant floor (`floor.haFloor`).
+
+Sensors are recognised by their `device_class` and unit, never by name, so a thermometer's battery sensor is not counted as a temperature:
+- **Temperature**: `sensor` entities with `device_class: temperature` or a °C/°F/K unit, and `climate` entities (`current_temperature`). Mixed °C and °F are converted and rounded to `decimals`.
+- **Humidity**: `sensor` entities with `device_class: humidity`, and `climate` entities with `current_humidity`.
+- **Presence**: `binary_sensor` entities with `device_class` `occupancy`, `motion` or `presence`, plus `person` and `device_tracker` entities. Shown as `👤 N`.
+- **Lights on**: `light` entities that are on (`💡 N`).
+- **Openings**: openings on the plan, and `door`, `window`, `garage_door` or `opening` binary sensors that are open (`🪟 N`).
+
+Use `summary.excludeEntities` to leave a sensor out (for example a garage or patio thermometer), and `summary.customText` to write the badge yourself with `{temp}`, `{humidity}`, `{presence}`, `{lights}` and `{windows}` placeholders.
+
+### Options
+| Key | Where | Description |
+| --- | --- | --- |
+| `floorSummary.enabled` | card | Show summaries on every floor (default `false`). |
+| `floorSummary.metrics` | card | Which of `temperature`, `humidity`, `presence`, `lights`, `windows` to show (default: all five). |
+| `floorSummary.decimals` | card | Decimal places for the temperature (default `1`). |
+| `summary.enabled` | floor | Turn this floor's summary on or off, overriding the card setting. |
+| `summary.temperatureEntity` / `humidityEntity` / `presenceEntity` | floor | Helper entity used instead of discovery. Setting one also turns the summary on for that floor. |
+| `summary.excludeEntities` | floor | Entity ids left out of discovery. |
+| `summary.customText` | floor | Badge text template. |
 
 ### Visual Editor Integration
 1. Click the floor settings button (the floor name dropdown or pencil/cog icon) in the editor header.
@@ -58,87 +77,88 @@ floors:
   - id: 1st
     name: First Floor
     panels:
-      # Compact appliance / workstation monitor
-      - id: workstation_panel
-        targetType: furniture
-        targetId: desk_pc
-        style: slim
-        x: 680
-        'y': 220
-        title: Workstation
-        tag: OFFICE
-        status: ACTIVE
-        metrics:
-          - entity: sensor.workstation_power
-            label: Power Draw
-            icon: mdi:flash
-            unit: "W"
-          - entity: sensor.workstation_temp
-            label: CPU Temp
-            icon: mdi:thermometer
-            unit: "°C"
-        tap_action:
-          action: more-info
-          entity: switch.workstation_outlet
-
-      # Extended room climate & environmental monitor
+      # Room climate panel, anchored to the living room
       - id: living_room_panel
         targetType: area
         targetId: living_room
-        style: extended
+        style: tech
         x: 180
         'y': 140
         title: Living Room
-        tag: CLIMATE
-        status: OK
         metrics:
           - entity: sensor.living_room_temp
             label: Temperature
             icon: mdi:thermometer
-            unit: "°C"
           - entity: sensor.living_room_humidity
             label: Humidity
             icon: mdi:water-percent
-            unit: "%"
           - entity: sensor.living_room_co2
             label: Air Quality
             icon: mdi:molecule-co2
-            unit: "ppm"
-        tap_action:
-          action: zoom
+            unit: ppm
+
+      # Compact workstation monitor, anchored to a furniture piece
+      - id: workstation_panel
+        targetType: furniture
+        targetId: desk_pc
+        style: minimal
+        color: "#ff9100"
+        x: 680
+        'y': 220
+        title: Workstation
+        metrics:
+          - entity: sensor.workstation_power
+            label: Power Draw
+            icon: mdi:flash
+          - entity: sensor.workstation_cpu_temperature
+            label: CPU Temp
 ```
+
+### Panel options
+| Key | Description |
+| --- | --- |
+| `id` | Unique id of the panel. |
+| `x`, `y` | Where the panel's centre sits on the plan. |
+| `title` | Header text. Defaults to the linked room's name (or the furniture type), then `Telemetry`. |
+| `style` | `tech` (chamfered HUD, default), `minimal` (rounded card) or `pill` (one line). |
+| `color` | Accent colour for the border, icons, status dot and leader line. |
+| `targetType` | What the leader line points at; see below. |
+| `targetId` | Id of the room, furniture piece or roof for `targetType`. |
+| `anchor` | `{ x, y }`: an explicit point for the leader line, overriding the target. |
+| `showLeaderLine` | `false` hides the leader line. |
+| `showIn2D`, `showIn3D` | `false` hides the panel in that view. |
+| `showOnlyWhenZoomed` | Only show the panel while its room is zoomed into. |
+| `metrics` | Rows: `entity` (required), and optional `label`, `icon`, `unit`, `attribute` (show an attribute instead of the state). |
 
 ### Anchor Targets (`targetType`)
 Each panel connects to a spatial anchor via an SVG leader line:
-| `targetType` | Description | Leader Line Behavior |
-| --- | --- | --- |
-| `area` | Anchors to a room boundary or room center. | Automatically tracks room center; clicking panel can zoom into room. |
-| `furniture` | Anchors to furniture or appliances (desk, server rack, TV, 3D printer). | Follows the furniture item if moved. |
-| `floor` | Anchors to general floor coordinates. | General level telemetry. |
-| `roof` | Anchors to a roof outline. | Supports full 3D outdoor elevation projection! |
-| `custom` | Anchors to explicit `anchorX` and `anchorY` canvas coordinates. | Fixed pin anywhere on canvas. |
+| `targetType` | Leader line points at |
+| --- | --- |
+| `area` | The room named by `targetId`. Without one, the room the panel sits in, or the nearest room. Tapping the panel zooms into that room. |
+| `furniture` | The furniture piece named by `targetId`, and follows it when it moves. |
+| `roof` | The roof named by `targetId`, or the roof the panel sits over. Projected at roof height in 3D. |
+| `floor` / `fixed` | Nothing, unless you set `anchor: { x, y }`. |
 
 ### 3D Projection & Outdoor Roof Attachment
 In 3D view (`view: 3d`) and outdoor stacked house view (`isOutdoor: true`):
 - Panels attached to floors or rooms project at their floor's physical elevation.
-- Panels attached to roofs (`targetType: roof`) project at the roof's physical 3D elevation (`z0 = floorBaseZ + wallHeight`), enabling exterior rooftop telemetry (e.g. solar PV generation, roof weather stations, ambient exterior temperatures).
-- Leader lines render dynamically in 3D isometric space connecting the panel to the 3D surface point.
+- Panels attached to roofs (`targetType: roof`) project at the roof's physical 3D elevation, for exterior rooftop telemetry (e.g. solar PV generation, roof weather stations).
+- Leader lines render in 3D isometric space connecting the panel to the 3D surface point.
 
-### Visual Styles
-- **`slim`**: Streamlined single-column HUD card with title bar, tag, status pill, and stacked icon/label/value rows. Ideal for desks, appliances, equipment, and tight layouts.
-- **`extended`**: Wide card with high-visibility primary readings, secondary status indicators, and contextual sub-labels.
+### Theming
+The panel backgrounds are dark in every theme, so panels carry their own text colour. Override them together:
+| Variable | Default |
+| --- | --- |
+| `--fp-panel-bg` | dark navy (per style) |
+| `--fp-panel-text` | `#fff` |
+| `--fp-panel-accent` | `#00e5ff` (or `color`) |
+| `--fp-panel-border` | translucent white (`minimal`, `pill`) |
 
-### Interactive Tap Actions
-Panels support full Lovelace tap actions:
-- `zoom`: Instantly zooms and centers the floorplan on the anchored room or element.
-- `navigate`: Navigates to another dashboard path or subview.
-- `more-info`: Opens Home Assistant's native entity more-info dialog for a linked entity.
-- `url`: Opens an external link.
-- `none`: Disables tap interaction.
+In the `line-art` appearance, panels switch to a white card with ink text.
 
 ### Visual Editor Support
-- **Add**: Choose **+ Add → Panel** to drop a new callout panel onto the active floor.
-- **Position**: Drag the panel card to position it on the canvas. Drag the target crosshairs to place or snap the anchor onto any room, furniture piece, or roof.
-- **Inspector**: Select the panel to configure its title, tag, style (`slim` vs `extended`), target type, metrics list, and tap action in the sidebar inspector.
+- **Add**: Choose **+ Add → Panel** to drop a new callout panel onto the active floor. It links to the room it sits in (or the nearest room), so it has a leader line straight away.
+- **Position**: Drag the panel card to position it on the canvas.
+- **Inspector**: Select the panel to set its title, style, accent colour, target type and target, leader line and visibility options, and metrics list.
 
 ![Configuring an Info-Panel in the Visual Editor Inspector](img/panel-configuration.png)
