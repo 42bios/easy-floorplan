@@ -68,4 +68,29 @@ export const floorSwitcherStyles = css`
     color: var(--fp-floor-switcher-active-color, var(--_fp-floor-accent-ink, var(--fp-skin-accent-ink, var(--text-primary-color, #fff))));
     border-color: var(--fp-floor-switcher-active-border-color, var(--fp-floor-switcher-active-background, var(--fp-floor-accent, var(--_fp-floor-accent, var(--fp-skin-accent, var(--primary-color, #03a9f4))))));
   }
+  :where(.floor-switcher) .floor-button.has-summary {
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    max-width: var(--fp-floor-switcher-max-width, 180px);
+    line-height: 1.2;
+    padding: var(--fp-floor-switcher-padding, var(--_fp-floor-padding, 6px 10px));
+  }
+  :where(.floor-switcher) .floor-button-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    max-width: 100%;
+  }
+  :where(.floor-switcher) .floor-button-summary {
+    font-size: var(--fp-floor-switcher-summary-size, 11px);
+    opacity: var(--fp-floor-switcher-summary-opacity, 0.85);
+    margin-top: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+    font-weight: normal;
+  }
 `;

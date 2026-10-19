@@ -18,6 +18,7 @@ import type {
   Roof,
   AreaPoint,
 } from "./types";
+import { computeFloorSummary } from "./floor-summary";
 import { buildRenderHass } from "./replay-history/render-state-service";
 import "./replay-history/history-timeline";
 import "./replay-history/replay-panel";
@@ -2352,7 +2353,7 @@ export class FloorplanCard extends LitElement {
                and the position is chosen against the view people spend their
                time in, which is the unzoomed one. -->
           ${floors.length > 1
-        ? this._renderFloorSwitcher(floors, active, c, rot)
+        ? this._renderFloorSwitcher(floors, active, c, rot, renderHass)
         : nothing}
         </div>
         </div>
@@ -2384,6 +2385,7 @@ export class FloorplanCard extends LitElement {
     active: Floor,
     c: FloorplanCardConfig,
     rot: number = 0,
+    renderHass?: RenderHass,
   ): TemplateResult {
     // Where the author put it (issue #281), mapped into the displayed frame
     // like every other anchor so a rotated card keeps it in the same corner of
@@ -2395,6 +2397,9 @@ export class FloorplanCard extends LitElement {
       ? rotatePlanPoint(at.x, at.y, cssNumber(c.width, DEFAULT_WIDTH), cssNumber(c.height, DEFAULT_HEIGHT), rot)
       : undefined;
     const dims = rotatedCanvasSize(cssNumber(c.width, DEFAULT_WIDTH), cssNumber(c.height, DEFAULT_HEIGHT), rot);
+    const placement = c.floorSummary?.placement ?? "buttons";
+    const allowInButtons = placement === "buttons" || placement === "both";
+
     return html`
       <div
         class="floor-switcher ${floorSwitcherClasses(c)} ${placed ? "placed" : ""}"
@@ -2410,19 +2415,31 @@ export class FloorplanCard extends LitElement {
           // resting buttons stay theme-neutral. cssColor gates the config
           // string; no custom color falls back to the theme primary.
           const accent = f.id === active.id ? cssColor(f.color) : undefined;
+          const summary =
+            allowInButtons && (c.floorSummary?.enabled || f.summary?.enabled) && f.summary?.enabled !== false
+              ? computeFloorSummary(f, renderHass, c.floorSummary)
+              : undefined;
+          const hasSummary = !!(summary && summary.enabled && summary.badgeText);
+          const titleText = (hasSummary && summary?.tooltip) || f.name;
+
           return html`
             <button
               type="button"
-              class="floor-button ${f.id === active.id ? "active" : ""}"
+              class="floor-button ${f.id === active.id ? "active" : ""} ${hasSummary ? "has-summary" : ""}"
               part=${f.id === active.id ? "floor-button floor-button-active" : "floor-button"}
               data-floor-id=${f.id}
-              title=${f.name}
-              aria-label=${f.name}
+              title=${titleText}
+              aria-label=${titleText}
               aria-pressed=${f.id === active.id ? "true" : "false"}
               style=${accent ? `--fp-floor-accent:${accent};` : nothing}
               @click=${() => this._goToFloor(floors, f.id)}
             >
-              ${f.short || f.name}
+              ${hasSummary
+                ? html`
+                    <span class="floor-button-title">${f.short || f.name}</span>
+                    <span class="floor-button-summary">${summary.badgeText}</span>
+                  `
+                : f.short || f.name}
             </button>
           `;
         })}

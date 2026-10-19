@@ -158,4 +158,21 @@ describe("floor switcher appearance", () => {
   it("does not draw a switcher for one floor even with a preset", async () => {
     expect((await mount({ floorSwitcher: { style: "buttons" } }, 1)).switcher).toBeNull();
   });
+
+  it("renders summary badge line and typography when floorSummary is enabled", async () => {
+    const t = await mount({
+      floorSummary: { enabled: true },
+    });
+    t.config.floors![0].summary = { customText: "21.5°C · 48%" };
+    t.card.setConfig(t.config);
+    await t.card.updateComplete;
+
+    const btn = t.buttons()[0];
+    expect(btn.classList.contains("has-summary")).toBe(true);
+    const summarySpan = btn.querySelector<HTMLElement>(".floor-button-summary")!;
+    expect(summarySpan).not.toBeNull();
+    expect(summarySpan.textContent?.trim()).toBe("21.5°C · 48%");
+    expect(getComputedStyle(summarySpan).fontSize).toBe("11px");
+    expect(parseFloat(getComputedStyle(summarySpan).opacity)).toBeCloseTo(0.85, 2);
+  });
 });
