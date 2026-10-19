@@ -32,6 +32,9 @@ control lights, and view the plan in 3D.
 - **Rooms and presence** — zoom into rooms, link Home Assistant areas, show
   presence ripples and track positions from distance sensors.
 - **Multiple floors** — switch between floors or navigate with a staircase.
+- **Furniture actions** — give a piece a tap, hold or double-tap action. A round
+  action icon marks it, or set `showIcon: false` to make the drawing itself the
+  button. See [actions on furniture](docs/behavior.md#actions-on-furniture).
 - **2D and 3D views** — display the same plan flat or with raised walls and furniture.
 - **Outdoor courtyard & 3D stacked house** — exterior view of the entire house stacking all levels at physical elevations, with ground slabs and 3D roofs.
 - **Appearance** — choose skins and named colors, add a background image to trace,
