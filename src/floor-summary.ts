@@ -16,7 +16,9 @@ import type {
 import {
   DEFAULT_FLOOR_SUMMARY_DECIMALS,
   DEFAULT_FLOOR_SUMMARY_METRICS,
+  entityIdsInHaArea,
   floorPanels,
+  haAreasOf,
 } from "./types";
 import { areaLabelPoint, pointInPolygon } from "./render";
 
@@ -197,6 +199,32 @@ export function detectFloorSensors(floor: Floor, hass: RenderHass | undefined): 
       if (metric.entity) rawEntityIds.add(metric.entity);
     }
   }
+
+  // 2. Areas and their linked Home Assistant areas
+  for (const area of floor.areas ?? []) {
+    if (area.entity) rawEntityIds.add(area.entity);
+    if (area.haArea) {
+      for (const id of entityIdsInHaArea(hass, area.haArea)) {
+        rawEntityIds.add(id);
+      }
+    }
+  }
+
+  // 3. Home Assistant Floor linkage
+  if (floor.haFloor) {
+    for (const a of haAreasOf(hass)) {
+      if (a.floor_id === floor.haFloor) {
+        for (const id of entityIdsInHaArea(hass, a.area_id)) {
+          rawEntityIds.add(id);
+        }
+      }
+    }
+  }
+
+  // 4. Configured summary helpers
+  if (floor.summary?.temperatureEntity) rawEntityIds.add(floor.summary.temperatureEntity);
+  if (floor.summary?.humidityEntity) rawEntityIds.add(floor.summary.humidityEntity);
+  if (floor.summary?.presenceEntity) rawEntityIds.add(floor.summary.presenceEntity);
 
   result.all = Array.from(rawEntityIds);
 
@@ -388,8 +416,16 @@ export function computeFloorSummary(
   hass: RenderHass | undefined,
   config?: FloorSummaryCardConfig
 ): FloorSummaryData {
+  const hasExplicitConfig = !!(
+    floor.summary?.temperatureEntity ||
+    floor.summary?.humidityEntity ||
+    floor.summary?.presenceEntity ||
+    floor.summary?.customText
+  );
   const enabled =
-    floor.summary?.enabled !== undefined ? floor.summary.enabled : (config?.enabled ?? false);
+    floor.summary?.enabled !== undefined
+      ? floor.summary.enabled
+      : (config?.enabled ?? hasExplicitConfig);
 
   const decimals = config?.decimals ?? DEFAULT_FLOOR_SUMMARY_DECIMALS;
   const exclude = floor.summary?.excludeEntities;
@@ -542,7 +578,8 @@ export function computeFloorSummary(
       .replace(/\{windows\}/gi, windowsFormatted)
       .trim();
   } else {
-    const metricsToShow = config?.metrics ?? DEFAULT_FLOOR_SUMMARY_METRICS;
+    const defaultMetrics = [...DEFAULT_FLOOR_SUMMARY_METRICS];
+    const metricsToShow = config?.metrics ?? defaultMetrics;
     const parts: string[] = [];
 
     if (metricsToShow.includes("temperature") && tempResult.formatted) {
@@ -693,6 +730,19 @@ export function resolvePanelAnchor(
     const furn = floor.furniture.find((f) => f.id === panel.targetId);
     if (furn) {
       return { x: furn.x, y: furn.y };
+    }
+    const roof = (floor.roofs ?? []).find((r) => r.id === panel.targetId);
+    if (roof && roof.points?.length) {
+      return areaLabelPoint(roof.points);
+    }
+  }
+  if (panel.targetType === "roof") {
+    const enclosing = (floor.roofs ?? []).find((r) => pointInPolygon(r.points, panel.x, panel.y));
+    if (enclosing && enclosing.points?.length) {
+      return areaLabelPoint(enclosing.points);
+    }
+    if ((floor.roofs ?? []).length > 0 && floor.roofs![0].points?.length) {
+      return areaLabelPoint(floor.roofs![0].points);
     }
   }
   if (panel.targetType === "area") {

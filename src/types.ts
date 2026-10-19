@@ -1757,9 +1757,9 @@ export interface FloorInfoPanel {
   y: number;
   /** Optional backward-compatible position object */
   position?: { x: number; y: number };
-  /** Target link type: floor aggregate, specific area, furniture piece, or free coordinate */
-  targetType?: "floor" | "area" | "furniture" | "fixed";
-  /** ID of the linked Area or Furniture item */
+  /** Target link type: floor aggregate, specific area, furniture piece, roof, or free coordinate */
+  targetType?: "floor" | "area" | "furniture" | "roof" | "fixed";
+  /** ID of the linked Area, Furniture, or Roof item */
   targetId?: string;
   /** Anchor point coordinate on the plan (defaults to area/furniture center) */
   anchor?: { x: number; y: number };
@@ -1836,6 +1836,9 @@ export const DEFAULT_FLOOR_SUMMARY_DECIMALS = 1;
 export const DEFAULT_FLOOR_SUMMARY_METRICS: Array<"temperature" | "humidity" | "presence" | "lights" | "windows"> = [
   "temperature",
   "humidity",
+  "presence",
+  "lights",
+  "windows",
 ];
 
 /** Sizing mode for the HTML overlay layer. See {@link FloorplanCardConfig.overlayScale}. */
@@ -2393,6 +2396,7 @@ export function haFloorsOf(hass: unknown): HaFloorInfo[] {
 export interface HaAreaInfo {
   area_id: string;
   name: string;
+  floor_id?: string | null;
 }
 
 /**

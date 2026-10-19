@@ -794,11 +794,12 @@ export class FloorplanCard extends LitElement {
     x: number,
     y: number,
     c: FloorplanCardConfig,
-    rot: number
+    rot: number,
+    z = 0
   ): { p: { x: number; y: number }; d: { w: number; h: number } } {
     const f = this._frame(c, rot);
     const r = rotatePlanPoint(x, y, c.width, c.height, rot);
-    return { p: projectPlanPoint(r.x, r.y, f), d: projectedCanvasSize(f) };
+    return { p: projectPlanPoint(r.x, r.y, f, z), d: projectedCanvasSize(f) };
   }
 
   /** A screen-space direction out of the rotated frame, turned by the projection as well. */
@@ -1739,21 +1740,71 @@ export class FloorplanCard extends LitElement {
     return true;
   }
 
+  private _visibleFloorPanels(
+    active: Floor,
+    c: FloorplanCardConfig,
+    iso: boolean,
+    zoomedArea: Area | undefined,
+    renderHass?: RenderHass
+  ): Array<{ panel: FloorInfoPanel; floor: Floor; z: number }> {
+    const result: Array<{ panel: FloorInfoPanel; floor: Floor; z: number }> = [];
+
+    // 1. Panels on the active floor
+    for (const p of floorPanels(active)) {
+      if (this._isPanelVisible(p, iso, zoomedArea)) {
+        let z = 0;
+        if (iso && (p.targetType === "roof" || (active.roofs ?? []).some((r) => r.id === p.targetId))) {
+          const r = (active.roofs ?? []).find((rf) => rf.id === p.targetId) ?? active.roofs?.[0];
+          const baseWallHeight = normalizeWallHeight(c.wallHeight);
+          z = baseWallHeight + (r?.height ?? 30) * 0.5;
+        }
+        result.push({ panel: p, floor: active, z });
+      }
+    }
+
+    // 2. If active is outdoor and 3D view: include roof panels from stacked indoor floors!
+    if (active.isOutdoor && iso) {
+      const floors = getFloors(c);
+      const hassSource = renderHass ?? this.hass;
+      const baseLevel = resolveFloorLevel(active, floors, hassSource);
+      const indoorFloors = floors.filter((f) => !f.isOutdoor);
+      const baseWallHeight = normalizeWallHeight(c.wallHeight);
+      const outdoorWallHeight = baseWallHeight * OUTDOOR_WALL_HEIGHT_MULTIPLIER;
+
+      for (const f of indoorFloors) {
+        const lvl = resolveFloorLevel(f, floors, hassSource);
+        const zOffset = (lvl - baseLevel) * outdoorWallHeight;
+
+        for (const p of floorPanels(f)) {
+          const isRoofPanel = p.targetType === "roof" || (f.roofs ?? []).some((r) => r.id === p.targetId);
+          if (isRoofPanel && this._isPanelVisible(p, iso, zoomedArea)) {
+            const r = (f.roofs ?? []).find((rf) => rf.id === p.targetId) ?? f.roofs?.[0];
+            const roofHeight = (r?.height ?? 30) * OUTDOOR_WALL_HEIGHT_MULTIPLIER;
+            const z = zOffset + outdoorWallHeight + roofHeight * 0.5;
+            result.push({ panel: p, floor: f, z });
+          }
+        }
+      }
+    }
+
+    return result;
+  }
+
   private _renderPanelLeaderLines(
     active: Floor,
-    _c: FloorplanCardConfig,
-    iso: boolean,
-    zoomedArea: Area | undefined
+    c: FloorplanCardConfig,
+    zoomedArea: Area | undefined,
+    renderHass?: RenderHass
   ): TemplateResult {
-    const panels = floorPanels(active).filter(
-      (p) => this._isPanelVisible(p, iso, zoomedArea) && p.showLeaderLine !== false
+    const list = this._visibleFloorPanels(active, c, false, zoomedArea, renderHass).filter(
+      (item) => item.panel.showLeaderLine !== false
     );
-    if (!panels.length) return svg`${nothing}`;
+    if (!list.length) return svg`${nothing}`;
 
     return svg`
       <g class="fp-panel-leader-lines">
-        ${panels.map((p) => {
-          const anchor = resolvePanelAnchor(p, active);
+        ${list.map(({ panel: p, floor }) => {
+          const anchor = resolvePanelAnchor(p, floor);
           if (!anchor) return nothing;
           const color = cssColor(p.color) ?? "var(--fp-panel-accent, var(--fp-skin-accent, var(--primary-color, #03a9f4)))";
           const d = computeLeaderLinePath(anchor, { x: p.x, y: p.y });
@@ -1770,31 +1821,81 @@ export class FloorplanCard extends LitElement {
     `;
   }
 
-  private _renderInfoPanel(
-    panel: FloorInfoPanel,
+  private _renderIsoPanelLeaderLines(
     active: Floor,
     c: FloorplanCardConfig,
     rot: number,
-    _scale: OverlayScale,
-    renderHass: RenderHass | undefined
+    zoomedArea: Area | undefined,
+    renderHass?: RenderHass
   ): TemplateResult {
-    const { p, d } = this._display(panel.x, panel.y, c, rot);
+    const list = this._visibleFloorPanels(active, c, true, zoomedArea, renderHass).filter(
+      (item) => item.panel.showLeaderLine !== false
+    );
+    if (!list.length) return svg`${nothing}`;
+
+    const frame = this._frame(c, rot);
+    const map = (x: number, y: number) => rotatePlanPoint(x, y, c.width, c.height, rot);
+
+    return svg`
+      <g class="fp-panel-leader-lines fp-iso-leader-lines">
+        ${list.map(({ panel: p, floor, z }) => {
+          const anchor = resolvePanelAnchor(p, floor);
+          if (!anchor) return nothing;
+          const rAnchor = map(anchor.x, anchor.y);
+          const rPanel = map(p.x, p.y);
+          const pAnchor = projectPlanPoint(rAnchor.x, rAnchor.y, frame, z);
+          const pPanel = projectPlanPoint(rPanel.x, rPanel.y, frame, z);
+          const color = cssColor(p.color) ?? "var(--fp-panel-accent, var(--fp-skin-accent, var(--primary-color, #03a9f4)))";
+          const d = computeLeaderLinePath(pAnchor, pPanel);
+          return svg`
+            <g class="fp-panel-leader" data-panel-id=${p.id}>
+              <circle cx=${pAnchor.x} cy=${pAnchor.y} r="3.5" class="fp-panel-anchor-ring" fill=${color} stroke=${color} stroke-width="1.2" fill-opacity="0.25" />
+              <circle cx=${pAnchor.x} cy=${pAnchor.y} r="1" class="fp-panel-anchor-dot" fill="#ffffff" />
+              <path d=${d} class="fp-panel-leader-line" stroke=${color} stroke-width="1.4" fill="none" />
+              <circle cx=${pPanel.x} cy=${pPanel.y} r="2.5" class="fp-panel-target-dot" fill=${color} />
+            </g>
+          `;
+        })}
+      </g>
+    `;
+  }
+
+  private _renderInfoPanel(
+    panel: FloorInfoPanel,
+    panelFloor: Floor,
+    c: FloorplanCardConfig,
+    rot: number,
+    _scale: OverlayScale,
+    renderHass: RenderHass | undefined,
+    z = 0
+  ): TemplateResult {
+    const { p, d } = this._display(panel.x, panel.y, c, rot, z);
     const accent = cssColor(panel.color);
     const style = panel.style ?? "tech";
     const metrics = resolvePanelMetrics(panel, renderHass);
 
     let targetArea: Area | undefined;
     if (panel.targetId) {
-      targetArea = (active.areas ?? []).find((a) => a.id === panel.targetId);
+      targetArea = (panelFloor.areas ?? []).find((a) => a.id === panel.targetId);
+      if (!targetArea) {
+        const roof = (panelFloor.roofs ?? []).find((r) => r.id === panel.targetId);
+        if (roof && roof.points && roof.points.length >= 3) {
+          const rc = polygonCentroid(roof.points);
+          if (rc) {
+            targetArea = (panelFloor.areas ?? []).find((a) => pointInPolygon(a.points, rc.x, rc.y));
+          }
+        }
+      }
     }
     if (!targetArea && panel.targetType === "area") {
-      targetArea = (active.areas ?? []).find((a) => pointInPolygon(a.points, panel.x, panel.y));
+      targetArea = (panelFloor.areas ?? []).find((a) => pointInPolygon(a.points, panel.x, panel.y));
     }
 
     const title =
       panel.title ||
       targetArea?.name ||
-      (panel.targetId ? active.furniture.find((f) => f.id === panel.targetId)?.type : undefined) ||
+      (panel.targetType === "roof" ? "Roof Telemetry" : undefined) ||
+      (panel.targetId ? panelFloor.furniture.find((f) => f.id === panel.targetId)?.type : undefined) ||
       "Telemetry";
 
     const tappable = !!targetArea;
@@ -2406,9 +2507,10 @@ export class FloorplanCard extends LitElement {
                             opacity=${1 - sunLevel} />`
               : nothing
             }
-            ${this._renderPanelLeaderLines(active, c, iso, zoomedArea)}
+            ${!iso ? this._renderPanelLeaderLines(active, c, zoomedArea, renderHass) : nothing}
             </g>
             </g>
+            ${iso ? this._renderIsoPanelLeaderLines(active, c, rot, zoomedArea, renderHass) : nothing}
           </svg>`
         )}
           <div
@@ -2453,10 +2555,10 @@ export class FloorplanCard extends LitElement {
           (it) => this._renderItem(it, c, rot, scale, renderHass)
         )}
             ${repeat(
-          floorPanels(active).filter((p) => this._isPanelVisible(p, iso, zoomedArea)),
-          (p, i) => p.id || i,
-          (p) => this._renderInfoPanel(p, active, c, rot, scale, renderHass)
-        )}
+              this._visibleFloorPanels(active, c, iso, zoomedArea, renderHass),
+              (item, i) => item.panel.id || i,
+              (item) => this._renderInfoPanel(item.panel, item.floor, c, rot, scale, renderHass, item.z)
+            )}
           </div>
           </div>
           ${zoom.scale > 1
@@ -2556,10 +2658,19 @@ export class FloorplanCard extends LitElement {
           // resting buttons stay theme-neutral. cssColor gates the config
           // string; no custom color falls back to the theme primary.
           const accent = f.id === active.id ? cssColor(f.color) : undefined;
-          const summary =
-            allowInButtons && (c.floorSummary?.enabled || f.summary?.enabled) && f.summary?.enabled !== false
-              ? computeFloorSummary(f, renderHass, c.floorSummary)
-              : undefined;
+          const hasExplicitConfig = !!(
+            f.summary?.temperatureEntity ||
+            f.summary?.humidityEntity ||
+            f.summary?.presenceEntity ||
+            f.summary?.customText
+          );
+          const shouldCompute =
+            allowInButtons &&
+            f.summary?.enabled !== false &&
+            (c.floorSummary?.enabled || f.summary?.enabled === true || hasExplicitConfig);
+          const summary = shouldCompute
+            ? computeFloorSummary(f, renderHass, c.floorSummary)
+            : undefined;
           const hasSummary = !!(summary && summary.enabled && summary.badgeText);
           const titleText = (hasSummary && summary?.tooltip) || f.name;
 

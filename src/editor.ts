@@ -32,7 +32,6 @@ import type {
   FloorInfoPanelMetric,
 } from "./types";
 import {
-  detectFloorSensors,
   resolvePanelAnchor,
   computeLeaderLinePath,
 } from "./floor-summary";
@@ -4342,109 +4341,78 @@ export class FloorplanCardEditor extends LitElement {
                     />
                   </div>
                   <!-- Floor Summary Settings (issue #234) -->
-                  <div class="pop-row" style="font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; opacity: 0.7; margin-top: 6px;">
-                    Summary
-                  </div>
-                  <div class="pop-row">
-                    <label>Summary</label>
-                    <input
-                      type="checkbox"
-                      title="Show aggregate summary on switcher button"
-                      .checked=${floor?.summary?.enabled !== false}
-                      @change=${(e: Event) =>
-                        this._commitFloor({
-                          summary: {
-                            ...floor?.summary,
-                            enabled: (e.target as HTMLInputElement).checked ? undefined : false,
-                          },
-                        })}
-                    />
-                  </div>
-                  <div class="pop-row">
-                    <label>Temp helper</label>
-                    ${this._renderEntityPicker(
-                      floor?.summary?.temperatureEntity ?? "",
-                      (entity) =>
-                        this._commitFloor({
-                          summary: {
-                            ...floor?.summary,
-                            temperatureEntity: entity || undefined,
-                          },
-                        }),
-                      ["sensor", "climate"]
-                    )}
-                  </div>
-                  <div class="pop-row">
-                    <label>Humidity helper</label>
-                    ${this._renderEntityPicker(
-                      floor?.summary?.humidityEntity ?? "",
-                      (entity) =>
-                        this._commitFloor({
-                          summary: {
-                            ...floor?.summary,
-                            humidityEntity: entity || undefined,
-                          },
-                        }),
-                      ["sensor", "climate"]
-                    )}
-                  </div>
-                  <div class="pop-row">
-                    <label>Presence helper</label>
-                    ${this._renderEntityPicker(
-                      floor?.summary?.presenceEntity ?? "",
-                      (entity) =>
-                        this._commitFloor({
-                          summary: {
-                            ...floor?.summary,
-                            presenceEntity: entity || undefined,
-                          },
-                        }),
-                      ["binary_sensor", "input_boolean", "person", "device_tracker"]
-                    )}
-                  </div>
                   ${(() => {
-                    const discovered = floor ? detectFloorSensors(floor, this.hass) : undefined;
-                    const allDiscovered = discovered
-                      ? Array.from(
-                          new Set([
-                            ...discovered.temperature,
-                            ...discovered.humidity,
-                            ...discovered.presence,
-                            ...discovered.lights,
-                            ...discovered.windows,
-                          ])
-                        )
-                      : [];
-                    if (!allDiscovered.length) return nothing;
+                    const summaryEnabled =
+                      floor?.summary?.enabled !== undefined
+                        ? floor.summary.enabled
+                        : !!(
+                            floor?.summary?.temperatureEntity ||
+                            floor?.summary?.humidityEntity ||
+                            floor?.summary?.presenceEntity ||
+                            this._config.floorSummary?.enabled
+                          );
                     return html`
-                      <div class="pop-row" style="flex-direction: column; align-items: stretch; gap: 4px;">
-                        <label style="font-size: 10px; opacity: 0.8;">Discovered Sensors (uncheck to exclude):</label>
-                        <div style="max-height: 100px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px;">
-                          ${allDiscovered.map((eid) => {
-                            const excluded = (floor?.summary?.excludeEntities ?? []).includes(eid);
-                            return html`
-                              <label style="font-size: 10px; display: flex; align-items: center; gap: 4px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
-                                <input
-                                  type="checkbox"
-                                  .checked=${!excluded}
-                                  @change=${(e: Event) => {
-                                    const checked = (e.target as HTMLInputElement).checked;
-                                    const cur = floor?.summary?.excludeEntities ?? [];
-                                    const next = checked ? cur.filter((x) => x !== eid) : [...cur, eid];
-                                    this._commitFloor({
-                                      summary: {
-                                        ...floor?.summary,
-                                        excludeEntities: next.length ? next : undefined,
-                                      },
-                                    });
-                                  }}
-                                />
-                                ${eid}
-                              </label>
-                            `;
-                          })}
-                        </div>
+                      <div class="pop-row" style="margin-top: 6px;">
+                        <label>Summary enabled</label>
+                        <input
+                          type="checkbox"
+                          title="Show aggregate summary on switcher button"
+                          .checked=${summaryEnabled}
+                          @change=${(e: Event) =>
+                            this._commitFloor({
+                              summary: {
+                                ...floor?.summary,
+                                enabled: (e.target as HTMLInputElement).checked,
+                              },
+                            })}
+                        />
                       </div>
+                      ${summaryEnabled
+                        ? html`
+                            <div class="pop-row">
+                              <label>Temp helper</label>
+                              ${this._renderEntityPicker(
+                                floor?.summary?.temperatureEntity ?? "",
+                                (entity) =>
+                                  this._commitFloor({
+                                    summary: {
+                                      ...floor?.summary,
+                                      temperatureEntity: entity || undefined,
+                                    },
+                                  }),
+                                ["sensor", "climate"]
+                              )}
+                            </div>
+                            <div class="pop-row">
+                              <label>Humidity helper</label>
+                              ${this._renderEntityPicker(
+                                floor?.summary?.humidityEntity ?? "",
+                                (entity) =>
+                                  this._commitFloor({
+                                    summary: {
+                                      ...floor?.summary,
+                                      humidityEntity: entity || undefined,
+                                    },
+                                  }),
+                                ["sensor", "climate"]
+                              )}
+                            </div>
+                            <div class="pop-row">
+                              <label>Presence helper</label>
+                              ${this._renderEntityPicker(
+                                floor?.summary?.presenceEntity ?? "",
+                                (entity) =>
+                                  this._commitFloor({
+                                    summary: {
+                                      ...floor?.summary,
+                                      presenceEntity: entity || undefined,
+                                    },
+                                  }),
+                                ["binary_sensor", "input_boolean", "person", "device_tracker"]
+                              )}
+                            </div>
+                          `
+                        : nothing}
                     `;
                   })()}
                   <button
@@ -7502,15 +7470,42 @@ export class FloorplanCardEditor extends LitElement {
           .value=${p.targetType ?? "floor"}
           @change=${(e: Event) => {
             const tt = (e.target as HTMLSelectElement).value as FloorInfoPanel["targetType"];
-            this._updatePanel(p.id, { targetType: tt, targetId: undefined });
+            const updates: Partial<FloorInfoPanel> = { targetType: tt, targetId: undefined };
+            if (tt === "roof") {
+              updates.showIn2D = false;
+              updates.showIn3D = true;
+            }
+            this._updatePanel(p.id, updates);
           }}
         >
           <option value="floor">Floor (Plan Aggregate)</option>
           <option value="area">Area / Room</option>
           <option value="furniture">Furniture</option>
+          <option value="roof">Roof</option>
           <option value="fixed">Fixed coordinate</option>
         </select>
       </div>
+
+      ${p.targetType === "roof"
+        ? html`
+            <div class="row">
+              <label>Roof</label>
+              <select
+                .value=${p.targetId ?? ""}
+                @change=${(e: Event) =>
+                  this._updatePanel(p.id, {
+                    targetId: (e.target as HTMLSelectElement).value || undefined,
+                  })}
+              >
+                <option value="">(None / first roof)</option>
+                ${(f.roofs ?? []).map(
+                  (r, idx) =>
+                    html`<option value=${r.id}>${r.id || `Roof ${idx + 1}`} (${r.type})</option>`
+                )}
+              </select>
+            </div>
+          `
+        : nothing}
 
       ${p.targetType === "area"
         ? html`

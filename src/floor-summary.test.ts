@@ -223,6 +223,49 @@ describe("detectFloorSensors", () => {
     expect(res.lights).toContain("light.kitchen_ceiling");
     expect(res.windows).toContain("binary_sensor.kitchen_window");
   });
+
+  it("detects sensors across floor areas, linked haArea, haFloor, and summary helpers", () => {
+    const floor: Floor = {
+      ...makeFloor("Upstairs"),
+      haFloor: "first_floor",
+      areas: [
+        {
+          id: "bedroom",
+          name: "Bedroom",
+          entity: "sensor.bedroom_temp",
+          haArea: "ha_bedroom",
+          points: [{ x: 0, y: 0 }, { x: 50, y: 0 }, { x: 50, y: 50 }, { x: 0, y: 50 }],
+        },
+      ],
+      summary: {
+        presenceEntity: "binary_sensor.upstairs_presence",
+      },
+    };
+
+    const hass: any = {
+      states: {
+        "sensor.bedroom_temp": { state: "22.0", attributes: { device_class: "temperature", unit_of_measurement: "°C" } },
+        "sensor.bedroom_humidity": { state: "45", attributes: { device_class: "humidity", unit_of_measurement: "%" } },
+        "light.hallway": { state: "on", attributes: { device_class: "light" } },
+        "binary_sensor.upstairs_presence": { state: "on", attributes: { device_class: "presence" } },
+      },
+      areas: {
+        ha_bedroom: { area_id: "ha_bedroom", name: "Bedroom", floor_id: "first_floor" },
+        ha_hallway: { area_id: "ha_hallway", name: "Hallway", floor_id: "first_floor" },
+      },
+      entities: {
+        "sensor.bedroom_temp": { area_id: "ha_bedroom" },
+        "sensor.bedroom_humidity": { area_id: "ha_bedroom" },
+        "light.hallway": { area_id: "ha_hallway" },
+      },
+    };
+
+    const res = detectFloorSensors(floor, hass);
+    expect(res.temperature).toContain("sensor.bedroom_temp");
+    expect(res.humidity).toContain("sensor.bedroom_humidity");
+    expect(res.lights).toContain("light.hallway");
+    expect(res.presence).toContain("binary_sensor.upstairs_presence");
+  });
 });
 
 describe("calculateFloorAverage", () => {
@@ -574,6 +617,19 @@ describe("resolvePanelAnchor", () => {
         angle: 0,
       },
     ],
+    roofs: [
+      {
+        id: "roof_main",
+        type: "gable",
+        points: [
+          { x: 0, y: 0 },
+          { x: 100, y: 0 },
+          { x: 100, y: 100 },
+          { x: 0, y: 100 },
+        ],
+        height: 35,
+      },
+    ],
   };
 
   it("returns explicit anchor coordinate when specified", () => {
@@ -616,6 +672,32 @@ describe("resolvePanelAnchor", () => {
       x: 30,
       y: 40,
       targetType: "area",
+    };
+    const anchor = resolvePanelAnchor(panel, floor);
+    expect(anchor).toBeDefined();
+    expect(anchor?.x).toBe(50);
+    expect(anchor?.y).toBe(50);
+  });
+
+  it("resolves roof centroid when targetId points to a roof", () => {
+    const panel: FloorInfoPanel = {
+      id: "p1",
+      x: 150,
+      y: 150,
+      targetId: "roof_main",
+    };
+    const anchor = resolvePanelAnchor(panel, floor);
+    expect(anchor).toBeDefined();
+    expect(anchor?.x).toBe(50);
+    expect(anchor?.y).toBe(50);
+  });
+
+  it("resolves enclosing roof centroid when targetType is roof", () => {
+    const panel: FloorInfoPanel = {
+      id: "p1",
+      x: 30,
+      y: 40,
+      targetType: "roof",
     };
     const anchor = resolvePanelAnchor(panel, floor);
     expect(anchor).toBeDefined();

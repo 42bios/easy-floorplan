@@ -20,6 +20,10 @@ export const floorSwitcherStyles = css`
     align-items: stretch;
     gap: var(--fp-floor-switcher-gap, var(--_fp-floor-gap, 4px));
     max-width: calc(100% - 16px);
+    max-height: calc(100% - 24px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
   }
   .floor-switcher.row {
     flex-direction: row;
@@ -73,7 +77,7 @@ export const floorSwitcherStyles = css`
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    max-width: var(--fp-floor-switcher-max-width, 180px);
+    max-width: var(--fp-floor-switcher-max-width, 220px);
     line-height: 1.2;
     padding: var(--fp-floor-switcher-padding, var(--_fp-floor-padding, 6px 10px));
   }
