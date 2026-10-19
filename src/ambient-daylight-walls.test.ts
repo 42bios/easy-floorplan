@@ -83,21 +83,30 @@ describe("ambient daylight follows physical walls (#319)", () => {
       { id: "left-bottom", x1: 0, y1: bottom, x2: 0, y2: 300 }, partition];
 
     it("in a closed plan", () => {
-      const result = lights([...outer, partition], [window, passage])!;
+      const result = lights([...outer, partition], [window, passage], 1)!;
       expect(result[0]?.patch.openingId).toBe(window.id);
       expect(result[1]).toBeUndefined();
     });
 
     it("when the window falls a few units short of its jambs", () => {
-      const result = lights(bay(110, 190), [window, passage])!;
-      expect(result[0]?.patch.openingId).toBe(window.id);
-      expect(result[1]).toBeUndefined();
+      const result = lights(bay(110, 190), [window, passage], 1)!;
+      expect(result.map(light => light?.patch.openingId)).toEqual([window.id, undefined]);
     });
 
     it("when two windows side by side fill the gap", () => {
       const pair = [{ ...window, y: 100, length: 100 }, { ...window, id: "second", y: 200, length: 100 }];
-      const result = lights(bay(50, 250), [...pair, passage])!;
+      const result = lights(bay(50, 250), [...pair, passage], 1)!;
       expect(result.map(light => light?.patch.openingId)).toEqual([window.id, "second", undefined]);
+    });
+
+    it.each([3, 5])("when the window is nudged %s units off a solid wall", (offset) => {
+      const expected = lights([...outer, partition], [window, passage], 1)![0]!.patch;
+      for (const x of [-offset, offset]) {
+        const result = lights([...outer, partition], [{ ...window, x }, passage], 1)!;
+        expect(result[0]?.patch.gradientEnd).toEqual(expected.gradientEnd);
+        expect(result[0]?.patch.clipPoints).toEqual(expected.clipPoints);
+        expect(result[1]).toBeUndefined();
+      }
     });
   });
 

@@ -74,7 +74,7 @@ function bridgeOpenings(walls: readonly Wall[], openings: readonly Opening[]): W
     spans = kept.filter(s => ends(s).every(p => jamb(p, s, kept)));
   }
   return [...walls, ...spans.map(s => {
-    const [a, b] = ends(s).map(p => jamb(p, s, spans)!);
+    const [a, b] = ends(s).map(p => jamb(p, s, spans));
     return { id: s.id, x1: a!.x, y1: a!.y, x2: b!.x, y2: b!.y };
   })];
 }
