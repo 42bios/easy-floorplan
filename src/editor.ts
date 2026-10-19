@@ -7497,10 +7497,12 @@ export class FloorplanCardEditor extends LitElement {
                     targetId: (e.target as HTMLSelectElement).value || undefined,
                   })}
               >
-                <option value="">(None / first roof)</option>
+                <option value="" ?selected=${!p.targetId}>(None / first roof)</option>
                 ${(f.roofs ?? []).map(
                   (r, idx) =>
-                    html`<option value=${r.id}>${r.id || `Roof ${idx + 1}`} (${r.type})</option>`
+                    html`<option value=${r.id} ?selected=${p.targetId === r.id}>
+                      ${r.id || `Roof ${idx + 1}`} (${r.type})
+                    </option>`
                 )}
               </select>
             </div>
@@ -7518,9 +7520,9 @@ export class FloorplanCardEditor extends LitElement {
                     targetId: (e.target as HTMLSelectElement).value || undefined,
                   })}
               >
-                <option value="">(None / nearest)</option>
+                <option value="" ?selected=${!p.targetId}>(None / nearest)</option>
                 ${(f.areas ?? []).map(
-                  (a) => html`<option value=${a.id}>${a.name || a.id}</option>`
+                  (a) => html`<option value=${a.id} ?selected=${p.targetId === a.id}>${a.name || a.id}</option>`
                 )}
               </select>
             </div>
@@ -7538,10 +7540,10 @@ export class FloorplanCardEditor extends LitElement {
                     targetId: (e.target as HTMLSelectElement).value || undefined,
                   })}
               >
-                <option value="">(None)</option>
+                <option value="" ?selected=${!p.targetId}>(None)</option>
                 ${f.furniture.map(
                   (fu) =>
-                    html`<option value=${fu.id}>
+                    html`<option value=${fu.id} ?selected=${p.targetId === fu.id}>
                       ${furnitureLabel(fu.type, this._symbols())} (${Math.round(fu.x)}, ${Math.round(fu.y)})
                     </option>`
                 )}
