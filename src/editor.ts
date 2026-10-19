@@ -27,6 +27,7 @@ import type {
   StateColorRule,
   OverlayScale,
   PaletteColor,
+  Roof,
 } from "./types";
 import {
   normalizeSymbol,
@@ -148,6 +149,8 @@ import {
   normalizeOverlayMinWidth,
   overlayLength,
   wallThickness,
+  polygonCentroid,
+  pointInPolygon,
 } from "./render";
 import { autoLabelKey, measureLabelScene, rectToBox, type LabelSide } from "./label-placement";
 import { deadSpacesCached } from "./dead-space";
@@ -205,6 +208,7 @@ import {
   furnitureChoices,
   furnitureLabel,
   areaForm,
+  roofForm,
   areaNameForm,
   diffFormValue,
   floorImageForm,
@@ -240,7 +244,7 @@ import {
 const formLabel = (s: FormField): string => s.label;
 const formHelper = (s: FormField): string | undefined => s.helper;
 
-type Tool = "select" | "wall" | "door" | "passage" | "window" | "skylight" | "tracker" | "area";
+type Tool = "select" | "wall" | "door" | "passage" | "window" | "skylight" | "tracker" | "area" | "roof";
 type OverlaySel = { kind: "item" | "text"; id: string };
 
 /** Toolbar metadata per tool: mdi icon + label (icons make the modes scannable). */
@@ -252,13 +256,24 @@ const TOOL_META: Record<Tool, { icon: string; label: string }> = {
   // one number it is placed by (issue #309).
   passage: { icon: "mdi:arrow-expand-horizontal", label: "Passage" },
   window: { icon: "mdi:window-closed-variant", label: "Window" },
-  // A roof seen from outside, which is the one thing in the icon set that says
-  // "this is overhead" without saying "window" a second time — the two tools
-  // sit next to each other and have to be told apart at a glance.
+  // Skylight uses home-roof to distinguish from standard windows.
   skylight: { icon: "mdi:home-roof", label: "Skylight" },
   tracker: { icon: "mdi:crosshairs-gps", label: "Tracker" },
-  area: { icon: "mdi:vector-polygon", label: "Area" }
+  area: { icon: "mdi:vector-polygon", label: "Area" },
+  roof: { icon: "mdi:home-outline", label: "Roof" },
 };
+
+const TOOLS: readonly Tool[] = [
+  "select",
+  "wall",
+  "door",
+  "passage",
+  "window",
+  "skylight",
+  "tracker",
+  "area",
+  "roof",
+];
 
 /**
  * Where the editor draws the switcher handle before it has been placed.
@@ -292,6 +307,7 @@ const SEL_KIND_ICON: Record<SelKind, string> = {
   furniture: "mdi:sofa-outline",
   tracker: "mdi:crosshairs-gps",
   area: "mdi:floor-plan",
+  roof: "mdi:home-outline",
 };
 
 interface Drag {
@@ -369,6 +385,7 @@ interface Clipboard {
   furniture: Furniture[];
   trackers: Tracker[];
   areas: Area[];
+  roofs?: Roof[];
 }
 
 /** Snap distance (virtual units) for openings onto walls. */
@@ -1500,6 +1517,7 @@ export class FloorplanCardEditor extends LitElement {
     const fIds = movable("furniture");
     const trIds = movable("tracker");
     const aIds = movable("area");
+    const rIds = movable("roof");
     this._commitFloor({
       walls: f.walls.map((w) =>
         wIds.has(w.id) ? { ...w, x1: w.x1 + dx, y1: w.y1 + dy, x2: w.x2 + dx, y2: w.y2 + dy } : w
@@ -1515,6 +1533,9 @@ export class FloorplanCardEditor extends LitElement {
       ),
       areas: (f.areas ?? []).map((a) =>
         aIds.has(a.id) ? { ...a, points: a.points.map((p) => ({ x: p.x + dx, y: p.y + dy })) } : a
+      ),
+      roofs: (f.roofs ?? []).map((r) =>
+        rIds.has(r.id) ? { ...r, points: r.points.map((p) => ({ x: p.x + dx, y: p.y + dy })) } : r
       ),
     });
   }
@@ -1579,7 +1600,7 @@ export class FloorplanCardEditor extends LitElement {
       this._capturePointer(ev);
       return;
     }
-    if (this._tool === "area") {
+    if (this._tool === "area" || this._tool === "roof") {
       const pt = this._snapAreaPoint(raw.x, raw.y);
       if (this._draftArea) {
         this._addAreaPoint(pt);
@@ -1682,7 +1703,7 @@ export class FloorplanCardEditor extends LitElement {
       };
       return;
     }
-    if (this._tool === "area" && this._areaDragStart) {
+    if ((this._tool === "area" || this._tool === "roof") && this._areaDragStart) {
       const raw = this._toVirtual(ev, false);
       const start = this._areaDragStart;
       const current = { x: raw.x, y: raw.y };
@@ -1714,7 +1735,7 @@ export class FloorplanCardEditor extends LitElement {
       }
       return;
     }
-    if (this._tool === "area" && this._draftArea) {
+    if ((this._tool === "area" || this._tool === "roof") && this._draftArea) {
       const raw = this._toVirtual(ev, false);
       this._areaHover = this._snapAreaPoint(raw.x, raw.y);
       return;
@@ -1758,7 +1779,7 @@ export class FloorplanCardEditor extends LitElement {
       }
       return;
     }
-    if (this._tool === "area" && this._areaDragStart) {
+    if ((this._tool === "area" || this._tool === "roof") && this._areaDragStart) {
       const start = this._areaDragStart;
       const wasDrag = this._areaDragMoved;
       const draft = this._draftArea;
@@ -1772,15 +1793,28 @@ export class FloorplanCardEditor extends LitElement {
         const width = Math.abs(draft.points[1]!.x - draft.points[0]!.x);
         const height = Math.abs(draft.points[3]!.y - draft.points[0]!.y);
         if (width > 0 && height > 0) {
-          const points = rectAreaClamp(draft.points, this._floor().areas ?? [], { dx: 0, dy: 0 });
-          if (!rectAreaHasMinimumSize(points) || (this._floor().areas ?? []).some((other) => this._rectAreasOverlap({ id: "draft-area", points, showName: true }, other))) {
-            this._draftArea = null;
-            return;
+          if (this._tool === "roof") {
+            const defaultWallHeight = this._config?.wallHeight ?? 60;
+            const roof: Roof = {
+              id: uid("roof"),
+              type: "gable",
+              points: draft.points,
+              height: Math.round(defaultWallHeight * 0.6),
+            };
+            this._commitFloor({ roofs: [...(this._floor().roofs ?? []), roof] });
+            this._selection = [{ kind: "roof", id: roof.id }];
+            this._tool = "select";
+          } else {
+            const points = rectAreaClamp(draft.points, this._floor().areas ?? [], { dx: 0, dy: 0 });
+            if (!rectAreaHasMinimumSize(points) || (this._floor().areas ?? []).some((other) => this._rectAreasOverlap({ id: "draft-area", points, showName: true }, other))) {
+              this._draftArea = null;
+              return;
+            }
+            const rect: Area = { id: uid("area"), points, showName: true };
+            this._commitFloor({ areas: [...(this._floor().areas ?? []), rect] });
+            this._selection = [{ kind: "area", id: rect.id }];
+            this._tool = "select";
           }
-          const rect: Area = { id: uid("area"), points, showName: true };
-          this._commitFloor({ areas: [...(this._floor().areas ?? []), rect] });
-          this._selection = [{ kind: "area", id: rect.id }];
-          this._tool = "select";
         }
         this._draftArea = null;
         return;
@@ -1925,6 +1959,9 @@ export class FloorplanCardEditor extends LitElement {
       } else if (s.kind === "area") {
         const a = (f.areas ?? []).find((x) => x.id === s.id);
         if (a) m.set(`area:${a.id}`, { kind: "polygon", points: a.points.map((p) => ({ ...p })) });
+      } else if (s.kind === "roof") {
+        const r = (f.roofs ?? []).find((x) => x.id === s.id);
+        if (r) m.set(`roof:${r.id}`, { kind: "polygon", points: r.points.map((p) => ({ ...p })) });
       } else {
         // tracker — stored by top-left corner.
         const tr = (f.trackers ?? []).find((x) => x.id === s.id);
@@ -2148,6 +2185,21 @@ export class FloorplanCardEditor extends LitElement {
       this._emitFloor({
         areas: coupled.areas.map((a) => (a.id === drag.primary.id ? { ...a, points } : a)),
       });
+      return;
+    }
+
+    if (drag.primary.kind === "roof" && drag.areaVertex != null) {
+      const idx = drag.areaVertex;
+      const target = { x: this._snap(p.x), y: this._snap(p.y) };
+      const moving = (f.roofs ?? []).find((r) => r.id === drag.primary.id);
+      if (moving) {
+        const points = isRectArea(moving.points)
+          ? rectAreaVertexResize(moving.points, idx, target)
+          : moving.points.map((pt, i) => (i === idx ? target : pt));
+        this._emitFloor({
+          roofs: (f.roofs ?? []).map((r) => (r.id === drag.primary.id ? { ...r, points } : r)),
+        });
+      }
       return;
     }
 
@@ -2389,12 +2441,24 @@ export class FloorplanCardEditor extends LitElement {
     this._tool = "select";
   }
 
-  /** Close the in-progress Area draft into a committed polygon and select it. */
+  /** Close the in-progress Area or Roof draft into a committed polygon and select it. */
   private _finishArea(): void {
     if (!this._draftArea || this._draftArea.points.length < 3) return;
-    const area: Area = { id: uid("area"), points: this._draftArea.points, showName: true };
-    this._commitFloor({ areas: [...(this._floor().areas ?? []), area] });
-    this._selection = [{ kind: "area", id: area.id }];
+    if (this._tool === "roof") {
+      const defaultWallHeight = this._config?.wallHeight ?? 60;
+      const roof: Roof = {
+        id: uid("roof"),
+        type: "gable",
+        points: this._draftArea.points,
+        height: Math.round(defaultWallHeight * 0.6),
+      };
+      this._commitFloor({ roofs: [...(this._floor().roofs ?? []), roof] });
+      this._selection = [{ kind: "roof", id: roof.id }];
+    } else {
+      const area: Area = { id: uid("area"), points: this._draftArea.points, showName: true };
+      this._commitFloor({ areas: [...(this._floor().areas ?? []), area] });
+      this._selection = [{ kind: "area", id: area.id }];
+    }
     this._draftArea = null;
     this._areaHover = null;
     this._tool = "select";
@@ -2416,13 +2480,18 @@ export class FloorplanCardEditor extends LitElement {
     const start = this._areaDragStart;
     if (!start) return;
     const snapped = { x: this._snap(target.x), y: this._snap(target.y) };
-    this._draftArea = {
-      points: rectAreaClamp(
-        rectAreaPoints({ x0: start.x, y0: start.y, x1: snapped.x, y1: snapped.y }),
-        this._floor().areas ?? [],
-        { dx: snapped.x - start.x, dy: snapped.y - start.y }
-      ),
-    };
+    const rawPoints = rectAreaPoints({ x0: start.x, y0: start.y, x1: snapped.x, y1: snapped.y });
+    if (this._tool === "roof") {
+      this._draftArea = { points: rawPoints };
+    } else {
+      this._draftArea = {
+        points: rectAreaClamp(
+          rawPoints,
+          this._floor().areas ?? [],
+          { dx: snapped.x - start.x, dy: snapped.y - start.y }
+        ),
+      };
+    }
   }
 
   /** Add one polygon vertex, or close the draft when clicking its start. */
@@ -2466,6 +2535,7 @@ export class FloorplanCardEditor extends LitElement {
     const fIds = this._idsOfKind("furniture");
     const trIds = this._idsOfKind("tracker");
     const aIds = this._idsOfKind("area");
+    const rIds = this._idsOfKind("roof");
     this._commitFloor({
       walls: f.walls.filter((w) => !wIds.has(w.id)),
       openings: f.openings.filter((o) => !oIds.has(o.id)),
@@ -2474,6 +2544,7 @@ export class FloorplanCardEditor extends LitElement {
       furniture: f.furniture.filter((fu) => !fIds.has(fu.id)),
       trackers: (f.trackers ?? []).filter((tr) => !trIds.has(tr.id)),
       areas: (f.areas ?? []).filter((a) => !aIds.has(a.id)),
+      roofs: (f.roofs ?? []).filter((r) => !rIds.has(r.id)),
     });
     this._clearSel();
   }
@@ -2490,6 +2561,7 @@ export class FloorplanCardEditor extends LitElement {
     const fIds = this._idsOfKind("furniture");
     const trIds = this._idsOfKind("tracker");
     const aIds = this._idsOfKind("area");
+    const rIds = this._idsOfKind("roof");
     this._clipboard = structuredClone({
       walls: f.walls.filter((w) => wIds.has(w.id)),
       openings: f.openings.filter((o) => oIds.has(o.id)),
@@ -2498,6 +2570,7 @@ export class FloorplanCardEditor extends LitElement {
       furniture: f.furniture.filter((fu) => fIds.has(fu.id)),
       trackers: (f.trackers ?? []).filter((tr) => trIds.has(tr.id)),
       areas: (f.areas ?? []).filter((a) => aIds.has(a.id)),
+      roofs: (f.roofs ?? []).filter((r) => rIds.has(r.id)),
     });
   }
 
@@ -2564,6 +2637,12 @@ export class FloorplanCardEditor extends LitElement {
       id: uid("area"),
       points: a.points.map((p) => ({ x: p.x + off, y: p.y + off })),
     }));
+    const newRoofs: Roof[] = (cb.roofs ?? []).map((r) => ({
+      ...r,
+      ...loose,
+      id: uid("roof"),
+      points: r.points.map((p) => ({ x: p.x + off, y: p.y + off })),
+    }));
     this._commitFloor({
       walls: [...f.walls, ...newWalls],
       openings: [...f.openings, ...newOpenings],
@@ -2572,6 +2651,7 @@ export class FloorplanCardEditor extends LitElement {
       furniture: [...f.furniture, ...newFurn],
       trackers: [...(f.trackers ?? []), ...newTrackers],
       areas: [...(f.areas ?? []), ...newAreas],
+      roofs: [...(f.roofs ?? []), ...newRoofs],
     });
     this._selection = [
       ...newWalls.map((w) => ({ kind: "wall" as const, id: w.id })),
@@ -2581,6 +2661,7 @@ export class FloorplanCardEditor extends LitElement {
       ...newFurn.map((fu) => ({ kind: "furniture" as const, id: fu.id })),
       ...newTrackers.map((tr) => ({ kind: "tracker" as const, id: tr.id })),
       ...newAreas.map((a) => ({ kind: "area" as const, id: a.id })),
+      ...newRoofs.map((r) => ({ kind: "roof" as const, id: r.id })),
     ];
     this._tool = "select";
   }
@@ -2618,6 +2699,7 @@ export class FloorplanCardEditor extends LitElement {
       furniture: set(f.furniture, "furniture"),
       trackers: set(f.trackers ?? [], "tracker"),
       areas: set(f.areas ?? [], "area"),
+      roofs: set(f.roofs ?? [], "roof"),
     });
   }
 
@@ -2752,6 +2834,94 @@ export class FloorplanCardEditor extends LitElement {
     this._commitFloor({
       areas: (this._floor().areas ?? []).map((a) => (a.id === id ? { ...a, ...partial } : a)),
     });
+  }
+
+  private _updateRoof(id: string, partial: Partial<Roof>): void {
+    this._commitFloor({
+      roofs: (this._floor().roofs ?? []).map((r) => (r.id === id ? { ...r, ...partial } : r)),
+    });
+  }
+
+  private _createRoofFromArea(a: Area): void {
+    const defaultWallHeight = this._config?.wallHeight ?? 60;
+    const roof: Roof = {
+      id: uid("roof"),
+      type: "gable",
+      points: a.points.map((p) => ({ ...p })),
+      height: Math.round(defaultWallHeight * 0.6),
+    };
+    this._commitFloor({
+      roofs: [...(this._floor().roofs ?? []), roof],
+    });
+    this._selection = [{ kind: "roof", id: roof.id }];
+  }
+
+  private _elementsUnderRoof(r: Roof): {
+    areas: Area[];
+    items: FloorItem[];
+    furniture: Furniture[];
+    trackers: Tracker[];
+  } {
+    const floor = this._floor();
+    const rc = polygonCentroid(r.points);
+    const areas = (floor.areas ?? []).filter((a) => {
+      const ac = polygonCentroid(a.points);
+      return (
+        pointInPolygon(r.points, ac.x, ac.y) ||
+        a.points.some((p) => pointInPolygon(r.points, p.x, p.y)) ||
+        pointInPolygon(a.points, rc.x, rc.y) ||
+        r.points.some((p) => pointInPolygon(a.points, p.x, p.y))
+      );
+    });
+    const items = (floor.items ?? []).filter((it) => pointInPolygon(r.points, it.x, it.y));
+    const furniture = (floor.furniture ?? []).filter((fu) => pointInPolygon(r.points, fu.x, fu.y));
+    const trackers = (floor.trackers ?? []).filter((tr) =>
+      pointInPolygon(r.points, tr.x + tr.w / 2, tr.y + tr.h / 2)
+    );
+    return { areas, items, furniture, trackers };
+  }
+
+  private _roofsOverArea(a: Area): Roof[] {
+    const ac = polygonCentroid(a.points);
+    return (this._floor().roofs ?? []).filter((r) => {
+      const rc = polygonCentroid(r.points);
+      return (
+        pointInPolygon(r.points, ac.x, ac.y) ||
+        a.points.some((p) => pointInPolygon(r.points, p.x, p.y)) ||
+        pointInPolygon(a.points, rc.x, rc.y) ||
+        r.points.some((p) => pointInPolygon(a.points, p.x, p.y))
+      );
+    });
+  }
+
+  private _roofsOverPoint(x: number, y: number): Roof[] {
+    return (this._floor().roofs ?? []).filter((r) => pointInPolygon(r.points, x, y));
+  }
+
+  private _renderRoofChips(roofs: readonly Roof[], label = "Roof above:"): TemplateResult | typeof nothing {
+    if (!roofs.length) return nothing;
+    return html`
+      <div class="related-elements">
+        <div class="related-label">${label}</div>
+        <div class="related-chips">
+          ${roofs.map(
+            (r) => html`
+              <button
+                class="chip-btn"
+                title="Select this roof"
+                @click=${() => {
+                  this._selection = [{ kind: "roof", id: r.id }];
+                  this._liveEditKey = null;
+                }}
+              >
+                <ha-icon icon="mdi:home-outline"></ha-icon>
+                ${`Roof · ${r.type ? r.type.charAt(0).toUpperCase() + r.type.slice(1) : "Roof"}`}
+              </button>
+            `
+          )}
+        </div>
+      </div>
+    `;
   }
 
   /** Drop the HA-area link but keep the name the user sees on the plan. */
@@ -3481,6 +3651,13 @@ export class FloorplanCardEditor extends LitElement {
     });
   }
 
+  private _updateRoofLive(id: string, partial: Partial<Roof>): void {
+    this._beginLive("roof", id, partial);
+    this._emitFloor({
+      roofs: (this._floor().roofs ?? []).map((r) => (r.id === id ? { ...r, ...partial } : r)),
+    });
+  }
+
   private _patchConfigLive(partial: Partial<FloorplanCardConfig>): void {
     this._beginLive("config", "", partial);
     this._emit({ ...this._config, ...partial });
@@ -3500,7 +3677,7 @@ export class FloorplanCardEditor extends LitElement {
 
   /** Route a form patch to the right per-kind update helper (commit or burst). */
   private _applyElementPatch(
-    kind: "opening" | "item" | "text" | "furniture" | "tracker" | "wall" | "area",
+    kind: "opening" | "item" | "text" | "furniture" | "tracker" | "wall" | "area" | "roof",
     id: string,
     patch: Record<string, unknown>,
     live: boolean
@@ -3533,6 +3710,10 @@ export class FloorplanCardEditor extends LitElement {
       case "area":
         if (live) this._updateAreaLive(id, patch);
         else this._updateArea(id, patch);
+        break;
+      case "roof":
+        if (live) this._updateRoofLive(id, patch);
+        else this._updateRoof(id, patch);
         break;
     }
   }
@@ -3632,6 +3813,12 @@ export class FloorplanCardEditor extends LitElement {
         if (!a) return "Area";
         return `Area · ${a.name || `${a.points.length}-point`}`;
       }
+      case "roof": {
+        const r = (f.roofs ?? []).find((x) => x.id === sel.id);
+        if (!r) return "Roof";
+        const style = r.type ? r.type.charAt(0).toUpperCase() + r.type.slice(1) : "Roof";
+        return `Roof · ${style} (${r.points.length}-pt)`;
+      }
       default: {
         const tr = (f.trackers ?? []).find((x) => x.id === sel.id);
         return tr ? `Tracker · ${Math.round(tr.w)}×${Math.round(tr.h)}` : "Tracker";
@@ -3708,6 +3895,18 @@ export class FloorplanCardEditor extends LitElement {
             : n < 3
               ? `${n} point${n === 1 ? "" : "s"} placed — click to add more (3+ to close).`
               : `${n} points placed — click the first point to close the room, or keep adding.`}
+        </span>
+      `;
+    } else if (t === "roof") {
+      label = "Roof";
+      const n = this._draftArea?.points.length ?? 0;
+      body = html`
+        <span class="ctx-hint">
+          ${n === 0
+            ? "Drag a rectangle or click corners to draw a roof footprint."
+            : n < 3
+              ? `${n} point${n === 1 ? "" : "s"} placed — click to add more (3+ to close).`
+              : `${n} points placed — click the first point to close the roof, or keep adding.`}
         </span>
       `;
     } else if (t === "skylight") {
@@ -3952,7 +4151,7 @@ export class FloorplanCardEditor extends LitElement {
             <ha-icon icon=${TOOL_META[this._tool].icon}></ha-icon>
             <select aria-label="Drawing tool" .value=${this._tool}
               @change=${(event: Event) => this._chooseTool((event.target as HTMLSelectElement).value as Tool)}>
-              ${(["select", "wall", "door", "passage", "window", "skylight", "tracker", "area"] as Tool[]).map((tool) =>
+              ${TOOLS.map((tool) =>
                 html`<option value=${tool}>${TOOL_META[tool].label}</option>`)}
             </select>
           </label>
@@ -4016,9 +4215,7 @@ export class FloorplanCardEditor extends LitElement {
         <div class="workspace">
           <!-- Tools — modes; exactly one is active at a time -->
           <nav class="tool-rail" aria-label="Drawing tools">
-            ${(
-              ["select", "wall", "door", "passage", "window", "skylight", "tracker", "area"] as Tool[]
-            ).map(
+            ${TOOLS.map(
               (t) => html`
                 <button
                   class=${this._tool === t ? "active" : ""}
@@ -4250,6 +4447,11 @@ export class FloorplanCardEditor extends LitElement {
                 floor.areas ?? [],
                 (a, i) => a.id || i,
                 (a) => this._renderAreaSel(a, scopingAreaId)
+              )}
+              ${repeat(
+                floor.roofs ?? [],
+                (r, i) => r.id || i,
+                (r) => this._renderRoofSel(r)
               )}
               <!-- Dead spaces (issue #88), same layer position as the card so
                    what you draw is what you get. Live while you draw: closing
@@ -5405,6 +5607,32 @@ export class FloorplanCardEditor extends LitElement {
       </g>`;
   }
 
+  private _renderRoofSel(r: Roof): TemplateResult {
+    const selected = this._isSel("roof", r.id);
+    const activeTool = this._tool === "roof";
+    const pts = r.points.map((p) => `${p.x},${p.y}`).join(" ");
+    const color = cssColorOr(r.color, "#8d6e63");
+    const fill = selected || activeTool ? color : "none";
+    const fillOpacity = selected || activeTool ? "0.35" : "0";
+    return svg`
+      <g class="roof-hit ${selected ? "selected" : ""}">
+        <polygon points=${pts} class="roof-shape" fill=${fill} fill-opacity=${fillOpacity} stroke=${color} stroke-width="1.5" stroke-dasharray="5,3" />
+        <polygon points=${pts} class="area-hit-shape"
+                 @pointerdown=${(e: PointerEvent) => this._startDrag(e, { kind: "roof", id: r.id })} />
+        ${selected ? svg`<polygon points=${pts} class="area-outline" />` : nothing}
+        ${
+          selected && !r.locked
+            ? r.points.map(
+                (p, i) => svg`
+                  <circle cx=${p.x} cy=${p.y} r="7" class="handle"
+                          @pointerdown=${(e: PointerEvent) =>
+                            this._startDrag(e, { kind: "roof", id: r.id }, undefined, i)} />`
+              )
+            : nothing
+        }
+      </g>`;
+  }
+
   /**
   * The in-progress Area draft: committed vertices as dots and straight
   * segments between them. Once 3+ points are down the starting vertex is
@@ -6502,10 +6730,12 @@ export class FloorplanCardEditor extends LitElement {
         }
         this._applyElementPatch("opening", o.id, patch, live);
       };
+      const roofsOver = this._roofsOverPoint(o.x, o.y);
       if (this._selectionPage === "properties") return html`
         ${this._renderEssentialForm(spec, ["length", "width", "angle", "ceilingHeight"], apply)}
         ${this._renderEssentialForm(spec, FloorplanCardEditor.OPENING_GROUPS[0][1].filter((name) =>
           !["length", "width", "angle", "ceilingHeight"].includes(name)), apply)}
+        ${this._renderRoofChips(roofsOver)}
       `;
       /** A group, skipped when this opening has none of its fields. */
       const group = (title: string, names: readonly string[], ...extra: unknown[]) => {
@@ -6607,12 +6837,14 @@ export class FloorplanCardEditor extends LitElement {
         }
         this._applyElementPatch("item", it.id, patch, live);
       };
+      const roofsOver = this._roofsOverPoint(it.x, it.y);
       if (this._selectionPage === "properties") return html`
         ${this._renderEssentialForm(itemEntityForm(it, areaEntities), ["entity"], apply)}
         ${this._renderEssentialForm(itemIdentityForm(it), ["name", "showName"], apply)}
         ${this._renderEssentialForm(itemShowStateForm(it), ["showState"], apply)}
         ${this._renderEssentialForm(itemBadgeForm(it), ["size", "angle"], apply)}
         ${this._renderItemIconRow(it)}
+        ${this._renderRoofChips(roofsOver)}
       `;
       const entityState = it.entity ? this.hass?.states[it.entity] : undefined;
       const effects = itemEffectsForm(it, deviceClass, entityState);
@@ -6727,6 +6959,7 @@ export class FloorplanCardEditor extends LitElement {
       const fSpec = furnitureForm(f, this._areaEntitiesAt(f.x, f.y), this._symbols(), getFloors(this._config));
       const fApply = (patch: Record<string, unknown>, live: boolean) =>
         this._applyElementPatch("furniture", f.id, patch, live);
+      const roofsOver = this._roofsOverPoint(f.x, f.y);
       if (this._selectionPage === "properties") return html`
         ${this._renderEssentialForm(fSpec, ["w", "h", "angle", ...(f.type === "stairs" ? ["goToFloor"] : []), "hand"], fApply)}
         ${this._renderColorRow({
@@ -6735,6 +6968,7 @@ export class FloorplanCardEditor extends LitElement {
           onCommit: (color) => this._updateFurniture(f.id, { color }),
         })}
         <div class="secondary-property">${this._renderEssentialForm(fSpec, ["type"], fApply)}</div>
+        ${this._renderRoofChips(roofsOver)}
       `;
       return html`
         ${FloorplanCardEditor.FURNITURE_GROUPS.filter(([title]) => title !== "Shape").map(([title, names]) =>
@@ -6768,16 +7002,23 @@ export class FloorplanCardEditor extends LitElement {
       const aSpec = areaForm(a);
       const aApply = (patch: Record<string, unknown>, live: boolean) =>
         this._applyElementPatch("area", a.id, patch, live);
+      const roofsOver = this._roofsOverArea(a);
       if (this._selectionPage === "properties") return html`
         ${this._renderEssentialForm(areaNameForm(a, haAreas.map((ha) => ha.name)), ["name"], (patch, live) =>
           this._applyElementPatch("area", a.id, areaNamePatch(patch, haAreas), live))}
         ${this._renderAreaLinkRow(a, haAreas)}
-        ${this._renderEssentialForm(aSpec, ["showName", "labelSize", "opacity"], aApply)}
+        ${this._renderEssentialForm(aSpec, ["zoneKind", "showName", "labelSize", "opacity"], aApply)}
         ${this._renderColorRow({
           label: "Fill color", value: a.color, swatch: "#03a9f4", placeholder: "Default",
           onLive: (color) => this._updateAreaLive(a.id, { color }),
           onCommit: (color) => this._updateArea(a.id, { color }),
         })}
+        ${this._renderRoofChips(roofsOver, "Roofs above this room:")}
+        <div class="row wide">
+          <button class="secondary" @click=${() => this._createRoofFromArea(a)}>
+            <ha-icon icon="mdi:home-outline"></ha-icon> Create Roof from Room
+          </button>
+        </div>
       `;
       return html`
         ${this._renderGroup(
@@ -6861,6 +7102,125 @@ export class FloorplanCardEditor extends LitElement {
           : nothing}
         <p class="hint">
           Drag inside the fill to move the whole room; drag a vertex handle to reshape it.
+        </p>
+      `;
+    }
+
+    if (sel.kind === "roof") {
+      const r = (this._floor().roofs ?? []).find((x) => x.id === sel.id);
+      if (!r) return html`${nothing}`;
+      const defaultWallHeight = this._config?.wallHeight ?? 60;
+      const rSpec = roofForm(r, defaultWallHeight);
+      const rApply = (patch: Record<string, unknown>, live: boolean) =>
+        this._applyElementPatch("roof", r.id, patch, live);
+      const { areas, items, furniture, trackers } = this._elementsUnderRoof(r);
+      const hasUnder = areas.length > 0 || items.length > 0 || furniture.length > 0 || trackers.length > 0;
+      return html`
+        <p class="hint" style="margin-top: 0;">
+          Roofs are configured in the editor; 3D geometry is not shown on the card yet.
+        </p>
+        ${this._renderForm(rSpec, rApply)}
+        ${this._renderColorRow({
+          label: "Roof color",
+          value: r.color,
+          swatch: "#8d6e63",
+          placeholder: "Default (#8d6e63)",
+          onLive: (color) => this._updateRoofLive(r.id, { color }),
+          onCommit: (color) => this._updateRoof(r.id, { color }),
+        })}
+        ${hasUnder
+          ? html`
+              <div class="related-elements">
+                <div class="related-label">Elements under roof:</div>
+                ${areas.length
+                  ? html`
+                      <div class="related-chips">
+                        ${areas.map(
+                          (a) => html`
+                            <button
+                              class="chip-btn"
+                              title="Select this area"
+                              @click=${() => {
+                                this._selection = [{ kind: "area", id: a.id }];
+                                this._liveEditKey = null;
+                              }}
+                            >
+                              <ha-icon icon="mdi:floor-plan"></ha-icon>
+                              ${a.name || "Area"}
+                            </button>
+                          `
+                        )}
+                      </div>
+                    `
+                  : nothing}
+                ${items.length
+                  ? html`
+                      <div class="related-chips">
+                        ${items.map(
+                          (it) => html`
+                            <button
+                              class="chip-btn"
+                              title="Select this device"
+                              @click=${() => {
+                                this._selection = [{ kind: "item", id: it.id }];
+                                this._liveEditKey = null;
+                              }}
+                            >
+                              <ha-icon icon="mdi:lightbulb-outline"></ha-icon>
+                              ${it.name || it.entity || "Item"}
+                            </button>
+                          `
+                        )}
+                      </div>
+                    `
+                  : nothing}
+                ${furniture.length
+                  ? html`
+                      <div class="related-chips">
+                        ${furniture.map(
+                          (fu) => html`
+                            <button
+                              class="chip-btn"
+                              title="Select this furniture"
+                              @click=${() => {
+                                this._selection = [{ kind: "furniture", id: fu.id }];
+                                this._liveEditKey = null;
+                              }}
+                            >
+                              <ha-icon icon="mdi:sofa-outline"></ha-icon>
+                              ${fu.type || "Furniture"}
+                            </button>
+                          `
+                        )}
+                      </div>
+                    `
+                  : nothing}
+                ${trackers.length
+                  ? html`
+                      <div class="related-chips">
+                        ${trackers.map(
+                          (tr) => html`
+                            <button
+                              class="chip-btn"
+                              title="Select this tracker"
+                              @click=${() => {
+                                this._selection = [{ kind: "tracker", id: tr.id }];
+                                this._liveEditKey = null;
+                              }}
+                            >
+                              <ha-icon icon="mdi:crosshairs-gps"></ha-icon>
+                              ${`Tracker (${Math.round(tr.w)}×${Math.round(tr.h)})`}
+                            </button>
+                          `
+                        )}
+                      </div>
+                    `
+                  : nothing}
+              </div>
+            `
+          : nothing}
+        <p class="hint">
+          Drag inside the roof footprint to move it; drag a vertex handle to reshape it.
         </p>
       `;
     }
@@ -7211,7 +7571,8 @@ export class FloorplanCardEditor extends LitElement {
     svg.door,
     svg.window,
     svg.tracker,
-    svg.area {
+    svg.area,
+    svg.roof {
       cursor: crosshair;
     }
     .grid {
@@ -7876,8 +8237,12 @@ export class FloorplanCardEditor extends LitElement {
       stroke-dasharray: 6 4;
       pointer-events: none;
     }
-    .area-hit {
+    .area-hit,
+    .roof-hit {
       cursor: move;
+    }
+    .roof-shape {
+      pointer-events: none;
     }
     /* Dead-space hatching (issue #88): a whole region of the canvas, so it must
        never take a pointer event — it sits over the very walls and doors you
@@ -8609,6 +8974,43 @@ export class FloorplanCardEditor extends LitElement {
     }
     .ha-link-chip .unlink:hover {
       opacity: 1;
+    }
+    .related-elements {
+      margin-top: 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+    .related-label {
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--secondary-text-color);
+    }
+    .related-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+    .chip-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 14px;
+      font-size: 12px;
+      background: var(--secondary-background-color, #eceff1);
+      color: var(--primary-text-color);
+      border: 1px solid var(--divider-color, #e0e0e0);
+      cursor: pointer;
+      transition: background 0.15s, border-color 0.15s;
+    }
+    .chip-btn:hover {
+      background: var(--primary-color, #03a9f4);
+      color: var(--text-primary-color, #fff);
+      border-color: var(--primary-color, #03a9f4);
+    }
+    .chip-btn ha-icon {
+      --mdc-icon-size: 16px;
     }
   `,
     floorSwitcherStyles,
