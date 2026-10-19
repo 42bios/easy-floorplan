@@ -10,4 +10,3 @@ deploy.env
 # never commit secrets
 *.secret
 .env
-tmp/
