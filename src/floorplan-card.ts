@@ -1794,6 +1794,13 @@ export class FloorplanCard extends LitElement {
     renderHass?: RenderHass
   ): Array<{ panel: FloorInfoPanel; floor: Floor; z: number }> {
     const result: Array<{ panel: FloorInfoPanel; floor: Floor; z: number }> = [];
+    // Called on every render: a plan with no panels anywhere returns before
+    // the floor and level lookups below. Read off the raw config, since
+    // getFloors itself normalises every floor.
+    const anyPanels = c.floors?.length
+      ? c.floors.some((f) => floorPanels(f).length > 0)
+      : (c.panels?.length ?? 0) > 0;
+    if (!anyPanels) return result;
 
     // 1. Panels on the active floor
     for (const p of floorPanels(active)) {
