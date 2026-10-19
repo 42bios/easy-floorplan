@@ -216,6 +216,25 @@ by the name its definition carries rather than its id — `cornerShowerCurved` i
 When gestures target different entities the tap wins, then the hold, then the double-tap,
 and a gesture that could not run never supplies the name.
 
+## Actions in YAML from the editor
+
+Some actions exist only in YAML — popup-card's `fire-dom-event`, for instance, carries
+keys HA's action dropdowns cannot show. In the editor, **Behavior → Show code editor**
+swaps the tap, hold and double-tap dropdowns for a YAML editor holding just those three
+actions, for the one device, opening, room or piece of furniture you have selected. There
+is no need to open the whole card's YAML:
+
+```yaml
+tap_action:
+  action: fire-dom-event
+  browser_mod:
+    service: browser_mod.popup
+    data: { title: Kitchen }
+```
+
+Any other key is refused with a message under the editor rather than half-applied.
+Deleting an action's lines clears it. **Show visual editor** switches back.
+
 ## Stairs that change floor
 
 A staircase already draws an arrow saying which way it goes. `goToFloor` makes that a

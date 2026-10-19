@@ -4462,6 +4462,9 @@ export class FloorplanCardEditor extends LitElement {
     const seen = this._actionYamlSeen;
     if (seen.key !== key || seen.json !== json) {
       this._actionYamlSeen = { key, json, gen: seen.gen + 1 };
+      // A refused edit's message belongs to the YAML it was about; a new
+      // element (or an undo) brings fresh YAML, so drop it.
+      if (this._actionYamlError) this._actionYamlError = "";
     }
     return html`<div class="action-yaml">
       ${keyed(this._actionYamlSeen.gen, html`<ha-yaml-editor
