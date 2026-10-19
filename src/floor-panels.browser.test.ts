@@ -7,8 +7,10 @@ import { makeFloor } from "./types";
 let seq = 0;
 async function mount(floor: Partial<Floor>, extraConfig: Partial<FloorplanCardConfig> = {}) {
   const host = document.createElement("div");
-  host.style.cssText = `width:600px;height:400px;--primary-color:#00e5ff;
-    --primary-text-color:#ffffff;--card-background-color:#0b1326;--text-primary-color:#ffffff;`;
+  // HA's default light theme: dark text on a light card. The panels bring
+  // their own dark background, so they must not inherit this text colour.
+  host.style.cssText = `width:600px;height:400px;--primary-color:#03a9f4;
+    --primary-text-color:#212121;--card-background-color:#ffffff;--text-primary-color:#ffffff;`;
   document.body.append(host);
 
   const fullFloor: Floor = {
@@ -77,6 +79,36 @@ describe("floor callout panels in real chromium", () => {
 
     const rows = root.querySelectorAll(".fp-panel-metric-row");
     expect(rows.length).toBe(2);
+  });
+
+  it("keeps light text on every dark panel style under a light HA theme", async () => {
+    const panels: FloorInfoPanel[] = (["tech", "minimal", "pill"] as const).map((style, i) => ({
+      id: `panel_${style}`,
+      x: 150 + i * 150,
+      y: 150,
+      title: style,
+      style,
+      metrics: [{ entity: "sensor.temp", label: "Temperature" }],
+    }));
+
+    const { root } = await mount({ panels }, { skin: "pastel" });
+
+    for (const style of ["tech", "minimal", "pill"]) {
+      const title = root.querySelector<HTMLElement>(`.fp-info-panel.${style} .fp-panel-title`)!;
+      const value = root.querySelector<HTMLElement>(`.fp-info-panel.${style} .fp-panel-metric-value`)!;
+      expect(getComputedStyle(title).color, style).toBe("rgb(255, 255, 255)");
+      expect(getComputedStyle(value).color, style).toBe("rgb(255, 255, 255)");
+    }
+  });
+
+  it("lets --fp-panel-text and --fp-panel-bg restyle a panel together", async () => {
+    const panel: FloorInfoPanel = { id: "p", x: 300, y: 150, title: "Hall", style: "minimal" };
+    const { root, host } = await mount({ panels: [panel] });
+    host.style.setProperty("--fp-panel-bg", "#ffffff");
+    host.style.setProperty("--fp-panel-text", "#102030");
+    const el = root.querySelector<HTMLElement>(".fp-info-panel.minimal")!;
+    expect(getComputedStyle(el).backgroundColor).toBe("rgb(255, 255, 255)");
+    expect(getComputedStyle(el.querySelector(".fp-panel-title")!).color).toBe("rgb(16, 32, 48)");
   });
 
   it("renders readable light background and dark ink text in line-art mode", async () => {

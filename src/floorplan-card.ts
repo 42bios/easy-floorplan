@@ -3887,7 +3887,9 @@ export class FloorplanCard extends LitElement {
       box-sizing: border-box;
       user-select: none;
       z-index: 10;
-      color: var(--fp-skin-text, var(--primary-text-color, #fff));
+      /* The panel backgrounds below are dark whatever the HA theme or skin,
+         so the text follows the panel, not the theme. Set both together. */
+      color: var(--fp-panel-text, #fff);
       font-family: inherit;
     }
     .fp-info-panel.clickable {
