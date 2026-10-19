@@ -47,6 +47,14 @@ describe("floor image in dark mode (issue #366)", () => {
     expect(names({ image: "a.png", imageDark: "b.png" })).not.toContain("imageInvertDark");
   });
 
+  it("offers fit and opacity for a dark-only image too", () => {
+    const names = (f: Partial<Floor>) => floorImageForm(f as Floor).fields.map((x) => x.name);
+    expect(names({})).not.toContain("imageFit");
+    expect(names({})).not.toContain("imageOpacity");
+    expect(names({ image: "a.png" })).toEqual(expect.arrayContaining(["imageFit", "imageOpacity"]));
+    expect(names({ imageDark: "b.png" })).toEqual(expect.arrayContaining(["imageFit", "imageOpacity"]));
+  });
+
   it("keeps the defaults out of the YAML", () => {
     const form = floorImageForm({ image: "a.png" } as Floor);
     expect(form.toPatch({ imageInvertDark: false })).toEqual({ imageInvertDark: undefined });

@@ -2984,7 +2984,8 @@ export function floorImageForm(f: Floor): FormSpec {
     },
     { name: "image", label: "Bg image", helper: "/local/floorplan.png or URL", selector: { text: {} } },
   ];
-  if (f.image) {
+  // Fit and opacity apply to whichever image is drawn, the dark one included.
+  if (f.image || f.imageDark) {
     fields.push({
       name: "imageFit",
       label: "Image fit",
