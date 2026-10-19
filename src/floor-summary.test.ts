@@ -720,6 +720,19 @@ describe("resolvePanelAnchor", () => {
     expect(anchor?.y).toBe(50);
   });
 
+  it("falls back to the nearest room when an area panel sits outside every room", () => {
+    const twoRooms: Floor = {
+      ...floor,
+      areas: [
+        ...(floor.areas ?? []),
+        { id: "study", name: "Study", points: [{ x: 300, y: 0 }, { x: 400, y: 0 }, { x: 400, y: 100 }, { x: 300, y: 100 }] },
+      ],
+    };
+    const panel: FloorInfoPanel = { id: "p1", x: 280, y: 160, targetType: "area" };
+    expect(resolvePanelAnchor(panel, twoRooms)).toEqual({ x: 350, y: 50 });
+    expect(resolvePanelAnchor(panel, { ...twoRooms, areas: [] })).toBeUndefined();
+  });
+
   it("resolves roof centroid when targetId points to a roof", () => {
     const panel: FloorInfoPanel = {
       id: "p1",

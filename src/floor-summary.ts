@@ -8,6 +8,7 @@
  */
 
 import type {
+  Area,
   Floor,
   FloorInfoPanel,
   FloorSummaryCardConfig,
@@ -791,12 +792,32 @@ export function resolvePanelAnchor(
     }
   }
   if (panel.targetType === "area") {
-    const enclosing = (floor.areas ?? []).find((a) => pointInPolygon(a.points, panel.x, panel.y));
-    if (enclosing && enclosing.points?.length) {
-      return areaLabelPoint(enclosing.points);
-    }
+    const room = nearestPanelArea(panel, floor);
+    if (room) return areaLabelPoint(room.points);
   }
   return undefined;
+}
+
+/**
+ * The room an `area` panel with no `targetId` belongs to: the one it sits in,
+ * or else the room whose label point is closest (what the editor offers as
+ * "(None / nearest)").
+ */
+export function nearestPanelArea(panel: FloorInfoPanel, floor: Floor): Area | undefined {
+  const rooms = (floor.areas ?? []).filter((a) => a.points?.length >= 3);
+  const enclosing = rooms.find((a) => pointInPolygon(a.points, panel.x, panel.y));
+  if (enclosing) return enclosing;
+  let best: Area | undefined;
+  let bestD = Infinity;
+  for (const a of rooms) {
+    const c = areaLabelPoint(a.points);
+    const d = Math.hypot(c.x - panel.x, c.y - panel.y);
+    if (d < bestD) {
+      bestD = d;
+      best = a;
+    }
+  }
+  return best;
 }
 
 /**

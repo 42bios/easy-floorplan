@@ -2471,6 +2471,9 @@ export class FloorplanCardEditor extends LitElement {
       y: this._snap(this._config.height / 2),
       title: "Panel",
       style: "tech",
+      // Linked to the room it sits in (or the nearest one), so a new panel
+      // gets a leader line straight away.
+      targetType: "area",
       showLeaderLine: true,
       showIn2D: true,
       showIn3D: true,

@@ -24,6 +24,7 @@ import {
   computeFloorSummary,
   floorHaEntityIds,
   floorSummaryShown,
+  nearestPanelArea,
   resolvePanelAnchor,
   computeLeaderLinePath,
   resolvePanelMetrics,
@@ -1933,7 +1934,7 @@ export class FloorplanCard extends LitElement {
       }
     }
     if (!targetArea && panel.targetType === "area") {
-      targetArea = (panelFloor.areas ?? []).find((a) => pointInPolygon(a.points, panel.x, panel.y));
+      targetArea = nearestPanelArea(panel, panelFloor);
     }
 
     const title =

@@ -153,6 +153,53 @@ describe("Visual Editor - Callout Panels (issue #234)", () => {
     expect(newPanel.y).toBe(300); // 600 / 2
   });
 
+  it("gives a panel added from '+ Add' a leader line to its room", async () => {
+    const { root, ed, panels } = await mountEditor();
+    expect(root.querySelectorAll(".panel-leader-sel").length).toBe(1);
+
+    root.querySelector<HTMLButtonElement>(".insert-menu > button")!.click();
+    await ed.updateComplete;
+    Array.from(root.querySelectorAll<HTMLButtonElement>("button.add-entry"))
+      .find((b) => b.textContent?.includes("Panel"))!
+      .click();
+    await ed.updateComplete;
+
+    const added = panels()[panels().length - 1];
+    expect(added.targetType).toBe("area");
+    expect(root.querySelectorAll(".edit-panel").length).toBe(2);
+    expect(root.querySelectorAll(".panel-leader-sel").length).toBe(2);
+  });
+
+  it("shows a saved target in the inspector's room and furniture selects", async () => {
+    const cfg = baseConfig();
+    const floor = cfg.floors![0];
+    floor.furniture = [{ id: "sofa", type: "sofa", x: 200, y: 200, w: 80, h: 40, angle: 0 } as never];
+    floor.panels = [
+      ...floorPanels(floor),
+      { id: "panel-sofa", x: 600, y: 120, title: "Sofa", targetType: "furniture", targetId: "sofa" },
+    ];
+    const { root, ed } = await mountEditor(cfg);
+
+    async function select(id: string): Promise<HTMLSelectElement | undefined> {
+      const el = root.querySelector<HTMLElement>(`.edit-panel[data-panel-id="${id}"]`) ??
+        Array.from(root.querySelectorAll<HTMLElement>(".edit-panel")).find((e) =>
+          e.textContent?.includes(id === "panel-init" ? "Climate HUD" : "Sofa"))!;
+      const r = el.getBoundingClientRect();
+      pointer(el, "pointerdown", r.left + r.width / 2, r.top + r.height / 2);
+      pointer(el, "pointerup", r.left + r.width / 2, r.top + r.height / 2);
+      await ed.updateComplete;
+      return Array.from(root.querySelectorAll<HTMLSelectElement>("select")).find((s) =>
+        Array.from(s.options).some((o) => o.value === "living_room" || o.value === "sofa"));
+    }
+
+    const room = await select("panel-init");
+    expect(room?.value).toBe("living_room");
+    expect(room?.selectedOptions[0]?.textContent?.trim()).toBe("Living Room");
+
+    const item = await select("panel-sofa");
+    expect(item?.value).toBe("sofa");
+  });
+
   it("selects panel and shows inspector form with title, style, and metrics", async () => {
     const { root, ed, latestConfig } = await mountEditor();
 
