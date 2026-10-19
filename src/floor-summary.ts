@@ -159,7 +159,73 @@ export function formatMetricValue(
 /**
  * Discovers candidate sensor entities placed on a floor.
  */
-export function detectFloorSensors(floor: Floor, hass: RenderHass | undefined): DetectedFloorSensors {
+/**
+ * Domains a floor summary can classify. Anything else in a linked HA area is
+ * left out, so the card does not re-render for entities it never reads.
+ */
+const SUMMARY_DOMAINS = new Set([
+  "sensor",
+  "binary_sensor",
+  "climate",
+  "light",
+  "cover",
+  "person",
+  "device_tracker",
+]);
+
+/**
+ * Entity ids a floor's linked Home Assistant areas (`area.haArea`) and floor
+ * (`floor.haFloor`) contribute to its summary. Reads the HA entity, device and
+ * area registries, so pass the full `hass` object, not a `RenderHass`.
+ */
+export function floorHaEntityIds(floor: Floor, registry: unknown): string[] {
+  const ids = new Set<string>();
+  const haAreaIds = new Set<string>();
+  for (const area of floor.areas ?? []) {
+    if (area.haArea) haAreaIds.add(area.haArea);
+  }
+  if (floor.haFloor) {
+    for (const a of haAreasOf(registry)) {
+      if (a.floor_id === floor.haFloor) haAreaIds.add(a.area_id);
+    }
+  }
+  for (const areaId of haAreaIds) {
+    for (const id of entityIdsInHaArea(registry, areaId)) {
+      if (SUMMARY_DOMAINS.has(id.split(".")[0])) ids.add(id);
+    }
+  }
+  return [...ids];
+}
+
+/**
+ * Whether a floor shows a summary: on unless the floor turns it off, when the
+ * card enables summaries, the floor enables its own, or the floor names a
+ * helper entity or custom text.
+ */
+export function floorSummaryShown(floor: Floor, config?: FloorSummaryCardConfig): boolean {
+  if (floor.summary?.enabled === false) return false;
+  return !!(
+    config?.enabled ||
+    floor.summary?.enabled === true ||
+    floor.summary?.temperatureEntity ||
+    floor.summary?.humidityEntity ||
+    floor.summary?.presenceEntity ||
+    floor.summary?.customText
+  );
+}
+
+/**
+ * Discovers candidate sensor entities placed on a floor.
+ *
+ * `haEntityIds` are the entities found through the floor's linked HA areas
+ * and floor (see {@link floorHaEntityIds}). When omitted they are looked up
+ * in `hass`, which only works when it carries the HA registries.
+ */
+export function detectFloorSensors(
+  floor: Floor,
+  hass: RenderHass | undefined,
+  haEntityIds?: readonly string[]
+): DetectedFloorSensors {
   const result: DetectedFloorSensors = {
     temperature: [],
     humidity: [],
@@ -200,28 +266,15 @@ export function detectFloorSensors(floor: Floor, hass: RenderHass | undefined): 
     }
   }
 
-  // 2. Areas and their linked Home Assistant areas
+  // 2. Areas, and the entities of their linked Home Assistant areas and floor
   for (const area of floor.areas ?? []) {
     if (area.entity) rawEntityIds.add(area.entity);
-    if (area.haArea) {
-      for (const id of entityIdsInHaArea(hass, area.haArea)) {
-        rawEntityIds.add(id);
-      }
-    }
+  }
+  for (const id of haEntityIds ?? floorHaEntityIds(floor, hass)) {
+    rawEntityIds.add(id);
   }
 
-  // 3. Home Assistant Floor linkage
-  if (floor.haFloor) {
-    for (const a of haAreasOf(hass)) {
-      if (a.floor_id === floor.haFloor) {
-        for (const id of entityIdsInHaArea(hass, a.area_id)) {
-          rawEntityIds.add(id);
-        }
-      }
-    }
-  }
-
-  // 4. Configured summary helpers
+  // 3. Configured summary helpers
   if (floor.summary?.temperatureEntity) rawEntityIds.add(floor.summary.temperatureEntity);
   if (floor.summary?.humidityEntity) rawEntityIds.add(floor.summary.humidityEntity);
   if (floor.summary?.presenceEntity) rawEntityIds.add(floor.summary.presenceEntity);
@@ -405,7 +458,8 @@ export function calculateFloorAverage(
 export function computeFloorSummary(
   floor: Floor,
   hass: RenderHass | undefined,
-  config?: FloorSummaryCardConfig
+  config?: FloorSummaryCardConfig,
+  haEntityIds?: readonly string[]
 ): FloorSummaryData {
   const hasExplicitConfig = !!(
     floor.summary?.temperatureEntity ||
@@ -421,7 +475,7 @@ export function computeFloorSummary(
   const decimals = config?.decimals ?? DEFAULT_FLOOR_SUMMARY_DECIMALS;
   const exclude = floor.summary?.excludeEntities;
   const excludeSet = new Set(exclude ?? []);
-  const detected = detectFloorSensors(floor, hass);
+  const detected = detectFloorSensors(floor, hass, haEntityIds);
   const states = hass?.states ?? {};
 
   // 1. Temperature

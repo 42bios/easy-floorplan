@@ -1794,20 +1794,10 @@ export function floorPanels(f: Floor | undefined): FloorInfoPanel[] {
 export interface FloorSummaryCardConfig {
   /** Master toggle to show summaries (default: false). */
   enabled?: boolean;
-  /**
-   * Where to display summary information:
-   * - "buttons": Inside the floor switcher buttons (default).
-   * - "bar": Floating chip bar on the active floor.
-   * - "panels": Floating callout info-panels with leader lines.
-   * - "both": Buttons and floating bar/panels.
-   */
-  placement?: "buttons" | "bar" | "panels" | "both";
-  /** Metrics to display in buttons/bar (default: ["temperature", "humidity"]). */
+  /** Metrics to display in the floor buttons (default: all five). */
   metrics?: Array<"temperature" | "humidity" | "presence" | "lights" | "windows">;
   /** Number of decimal places for temperature (default: 1). */
   decimals?: number;
-  /** Position of floating summary bar if placement includes "bar". */
-  barPosition?: "top-left" | "top-right" | "bottom-left" | "bottom-right";
 }
 
 /** Per-floor summary configuration (issue #234). */

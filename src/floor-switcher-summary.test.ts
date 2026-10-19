@@ -165,31 +165,4 @@ describe("Floor switcher button summary integration (Phase 2)", () => {
     const summary0 = buttons[0]?.querySelector(".floor-button-summary");
     expect(summary0?.textContent?.trim()).toBe("21.2°C | ECO");
   });
-
-  it("omits summary in switcher buttons when placement is 'panels'", async () => {
-    const f1 = {
-      ...makeFloor("Ground Floor"),
-      items: [{ id: "i1", kind: "sensor" as const, entity: "sensor.gf_temp", x: 10, y: 10 }],
-    };
-    const f2 = { ...makeFloor("Second Floor") };
-
-    const hassStates = {
-      "sensor.gf_temp": { state: "21.0", attributes: { device_class: "temperature", unit_of_measurement: "°C" } },
-    };
-
-    const { root } = await mountCard(
-      {
-        floors: [f1, f2],
-        floorSummary: {
-          enabled: true,
-          placement: "panels",
-        },
-      },
-      hassStates
-    );
-
-    const buttons = root.querySelectorAll<HTMLButtonElement>(".floor-switcher button");
-    expect(buttons[0]?.classList.contains("has-summary")).toBe(false);
-    expect(buttons[0]?.querySelector(".floor-button-summary")).toBeNull();
-  });
 });

@@ -22,6 +22,8 @@ import type {
 import { floorPanels } from "./types";
 import {
   computeFloorSummary,
+  floorHaEntityIds,
+  floorSummaryShown,
   resolvePanelAnchor,
   computeLeaderLinePath,
   resolvePanelMetrics,
@@ -285,6 +287,16 @@ export class FloorplanCard extends LitElement {
    * from `_watchedEntities` on purpose — see `collectNamedEntities`.
    */
   private _nameEntities: Set<string> = new Set();
+  /**
+   * Entities the floor summaries find through linked HA areas and floors
+   * (issue #234), per floor id. Read from the HA registries, so recomputed
+   * when the config or a registry changes, not on every render.
+   */
+  private _summaryHaEntities = new Map<string, string[]>();
+  /** What {@link _summaryHaEntities} was computed from. */
+  private _summaryDiscoveryInputs?: readonly unknown[];
+  /** `_watchedEntities` plus every discovered summary entity: what a render reads. */
+  private _renderEntities: Set<string> = new Set();
   private readonly _replayController = new ReplayControllerImpl({
     getConfig: () => this._config,
     getHass: () => this.hass,
@@ -391,6 +403,8 @@ export class FloorplanCard extends LitElement {
     };
     this._watchedEntities = collectWatchedEntities(this._config);
     this._nameEntities = collectNamedEntities(this._config);
+    this._summaryDiscoveryInputs = undefined;
+    this._syncSummaryDiscovery();
     this._syncMoonClock();
     this._syncHistoryServiceContext();
     this._replayController.clearConfigColorCache();
@@ -447,11 +461,12 @@ export class FloorplanCard extends LitElement {
    * for most updates nothing on this plan moved. Skip those renders entirely.
    */
   protected shouldUpdate(changed: PropertyValues): boolean {
+    const discoveryChanged = this._syncSummaryDiscovery();
     // Anything but a pure hass tick (config change, floor switch, first render).
     if (!(changed.size === 1 && changed.has("hass"))) return true;
     const prev = changed.get("hass") as HomeAssistant | undefined;
-    if (!prev || !this.hass) return true;
-    if (hassRenderInputsChanged(prev, this.hass, this._watchedEntities)) return true;
+    if (!prev || !this.hass || discoveryChanged) return true;
+    if (hassRenderInputsChanged(prev, this.hass, this._renderEntities)) return true;
     // Entities that name a button but draw nothing. They have to invalidate a
     // render — a renamed entity, or one that did not exist at first paint,
     // otherwise leaves the label stuck at the name it first found — but they
@@ -461,6 +476,36 @@ export class FloorplanCard extends LitElement {
       if (prev.states[id] !== this.hass.states[id]) return true;
     }
     return false;
+  }
+
+  /**
+   * Find the entities each summarised floor gets from its linked HA areas and
+   * floor (issue #234), and watch them with the rest of the plan. Runs only
+   * when the config or one of the HA registries has changed. Returns whether
+   * the set of discovered entities changed.
+   */
+  private _syncSummaryDiscovery(): boolean {
+    const c = this._config;
+    const reg = this.hass as unknown as { entities?: unknown; devices?: unknown; areas?: unknown } | undefined;
+    const inputs = [c, reg?.entities, reg?.devices, reg?.areas];
+    const prev = this._summaryDiscoveryInputs;
+    if (prev && inputs.every((v, i) => v === prev[i])) return false;
+    this._summaryDiscoveryInputs = inputs;
+    const perFloor = new Map<string, string[]>();
+    const all = new Set<string>();
+    if (c && reg) {
+      for (const f of getFloors(c)) {
+        if (!floorSummaryShown(f, c.floorSummary)) continue;
+        const ids = floorHaEntityIds(f, reg);
+        if (!ids.length) continue;
+        perFloor.set(f.id, ids);
+        for (const id of ids) all.add(id);
+      }
+    }
+    const before = this._renderEntities;
+    this._summaryHaEntities = perFloor;
+    this._renderEntities = all.size ? new Set([...this._watchedEntities, ...all]) : this._watchedEntities;
+    return before.size !== this._renderEntities.size || [...this._renderEntities].some((id) => !before.has(id));
   }
 
   /**
@@ -1943,7 +1988,7 @@ export class FloorplanCard extends LitElement {
     const c = this._displayConfig();
     const lineArt = c.appearance === "line-art";
     const replayState = this._replayController.getRenderState();
-    const renderHass = buildRenderHass(this.hass, this._watchedEntities, this._replayController.historyService(), replayState.enabled, replayState.currentTime);
+    const renderHass = buildRenderHass(this.hass, this._renderEntities, this._replayController.historyService(), replayState.enabled, replayState.currentTime);
     const floors = getFloors(c);
     const active = this._activeFloor(c);
     // Whole-plan display rotation (issue #33): the SVG rotates via one group
@@ -2640,9 +2685,6 @@ export class FloorplanCard extends LitElement {
       ? rotatePlanPoint(at.x, at.y, cssNumber(c.width, DEFAULT_WIDTH), cssNumber(c.height, DEFAULT_HEIGHT), rot)
       : undefined;
     const dims = rotatedCanvasSize(cssNumber(c.width, DEFAULT_WIDTH), cssNumber(c.height, DEFAULT_HEIGHT), rot);
-    const placement = c.floorSummary?.placement ?? "buttons";
-    const allowInButtons = placement === "buttons" || placement === "both";
-
     return html`
       <div
         class="floor-switcher ${floorSwitcherClasses(c)} ${placed ? "placed" : ""}"
@@ -2658,18 +2700,11 @@ export class FloorplanCard extends LitElement {
           // resting buttons stay theme-neutral. cssColor gates the config
           // string; no custom color falls back to the theme primary.
           const accent = f.id === active.id ? cssColor(f.color) : undefined;
-          const hasExplicitConfig = !!(
-            f.summary?.temperatureEntity ||
-            f.summary?.humidityEntity ||
-            f.summary?.presenceEntity ||
-            f.summary?.customText
-          );
-          const shouldCompute =
-            allowInButtons &&
-            f.summary?.enabled !== false &&
-            (c.floorSummary?.enabled || f.summary?.enabled === true || hasExplicitConfig);
-          const summary = shouldCompute
-            ? computeFloorSummary(f, renderHass, c.floorSummary)
+          // The discovered HA-area entities come from the registries, which
+          // renderHass does not carry; their states are in it, because they
+          // are watched (`_syncSummaryDiscovery`).
+          const summary = floorSummaryShown(f, c.floorSummary)
+            ? computeFloorSummary(f, renderHass, c.floorSummary, this._summaryHaEntities.get(f.id) ?? [])
             : undefined;
           const hasSummary = !!(summary && summary.enabled && summary.badgeText);
           const titleText = (hasSummary && summary?.tooltip) || f.name;
