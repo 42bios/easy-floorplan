@@ -1,10 +1,9 @@
 /**
- * Floor Summary & Telemetry Info-Panel Calculation Logic (issue #234).
+ * Floor Summary Calculation Logic (issue #234).
  * Pure, framework-agnostic helper functions for:
  * - Detecting candidate sensors on a floor (temperature, humidity, presence, lights, windows)
  * - Calculating numeric averages with unit conversion (e.g. °F ↔ °C) and exclusion filtering
  * - Computing structured floor summary metrics and badge text
- * - Resolving telemetry panel metric rows
  */
 
 import type {

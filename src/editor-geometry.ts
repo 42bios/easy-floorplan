@@ -17,7 +17,7 @@ import {
   Floor, 
   RenderHass, 
   StripSide,
-  openingIsSkylight,
+  openingIsSkylight 
 } from "./types";
 
 export const RECT_AREA_EPSILON = 0.001;
@@ -787,6 +787,7 @@ export function elementsAtPoint(
   (f.areas ?? []).forEach((a, i) => {
     if (pointInPolygon(a.points, x, y)) push("area", a.id, i, a.locked);
   });
+
   // Locked elements yield (issue #191): anything unlocked under the pointer is
   // picked first, whatever kind it is, so an unlocked window on a locked wall
   // selects the window. They stay in the list rather than dropping out of it —

@@ -840,12 +840,11 @@ export class FloorplanCard extends LitElement {
     x: number,
     y: number,
     c: FloorplanCardConfig,
-    rot: number,
-    z = 0
+    rot: number
   ): { p: { x: number; y: number }; d: { w: number; h: number } } {
     const f = this._frame(c, rot);
     const r = rotatePlanPoint(x, y, c.width, c.height, rot);
-    return { p: projectPlanPoint(r.x, r.y, f, z), d: projectedCanvasSize(f) };
+    return { p: projectPlanPoint(r.x, r.y, f), d: projectedCanvasSize(f) };
   }
 
   /** A screen-space direction out of the rotated frame, turned by the projection as well. */
