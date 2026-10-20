@@ -23,6 +23,10 @@ floors:
       presenceEntity: binary_sensor.ground_presence    # optional helper override
 ```
 
+### Single-Floor Plans
+
+Single-floor plans (such as apartments or single-storey homes) hide the floor switcher by default because floor navigation is not needed. When floor summary is enabled (either via `floorSummary.enabled: true` on the card or `summary.enabled: true` on the floor), the switcher is automatically displayed with a single button, providing an at-a-glance summary chip for the entire home without needing a multi-floor configuration.
+
 ## Automatic Sensor Discovery
 
 A helper entity (`temperatureEntity`, `humidityEntity`, `presenceEntity`) always wins. A dedicated Home Assistant helper, such as a Min/Max sensor averaging the floor's thermometers, is the recommended way to set the floor's figure.

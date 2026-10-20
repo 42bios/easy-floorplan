@@ -2483,7 +2483,7 @@ export class FloorplanCard extends LitElement {
                than one that overlaps the drawing for as long as a zoom lasts —
                and the position is chosen against the view people spend their
                time in, which is the unzoomed one. -->
-          ${floors.length > 1
+          ${floors.length > 1 || floors.some((f) => floorSummaryShown(f, c.floorSummary))
         ? this._renderFloorSwitcher(floors, active, c, rot, renderHass)
         : nothing}
         </div>

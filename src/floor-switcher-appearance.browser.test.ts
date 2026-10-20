@@ -155,8 +155,24 @@ describe("floor switcher appearance", () => {
     expect(getComputedStyle(t.buttons()[0]).fontSize).toBe("12px");
   });
 
-  it("does not draw a switcher for one floor even with a preset", async () => {
+  it("does not draw a switcher for one floor when floor summary is not enabled", async () => {
     expect((await mount({ floorSwitcher: { style: "buttons" } }, 1)).switcher).toBeNull();
+  });
+
+  it("draws a switcher for one floor when card-level floorSummary is enabled", async () => {
+    const t = await mount({ floorSummary: { enabled: true } }, 1);
+    expect(t.switcher).not.toBeNull();
+    expect(t.buttons()).toHaveLength(1);
+  });
+
+  it("draws a switcher for one floor when floor enables summary", async () => {
+    const t = await mount({}, 1);
+    expect(t.switcher).toBeNull();
+    t.config.floors![0].summary = { enabled: true, customText: "22.0°C" };
+    t.card.setConfig(t.config);
+    await t.card.updateComplete;
+    expect(t.card.shadowRoot!.querySelector(".floor-switcher")).not.toBeNull();
+    expect(t.card.shadowRoot!.querySelectorAll(".floor-switcher button")).toHaveLength(1);
   });
 
   it("renders summary badge line and typography when floorSummary is enabled", async () => {

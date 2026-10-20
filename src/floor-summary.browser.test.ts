@@ -126,4 +126,14 @@ describe("floor summary discovery in the real card", () => {
     const card = await mount([ground, upper], hassWith(states("21", "off")));
     expect(badge(card, "g")).toBe("18.5°C");
   });
+
+  it("summarises a single-floor plan when summaries are enabled", async () => {
+    const ground: Floor = {
+      ...makeFloor("Ground"),
+      id: "g",
+      areas: [room("lr", "Living", 40, "living")] as Floor["areas"],
+    };
+    const card = await mount([ground], hassWith(states("21", "on")));
+    expect(badge(card, "g")).toBe("21.0°C · 💡 1");
+  });
 });

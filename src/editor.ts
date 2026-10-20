@@ -6,6 +6,7 @@ import { repeat } from "lit/directives/repeat.js";
 import { keyed } from "lit/directives/keyed.js";
 import { validateYCoordinates } from "./config-coordinates";
 import { floorSwitcherClasses, floorSwitcherStyles } from "./floor-switcher";
+import { floorSummaryShown } from "./floor-summary";
 import type {
   HomeAssistant,
   FloorplanCardConfig,
@@ -4598,7 +4599,9 @@ export class FloorplanCardEditor extends LitElement {
             </svg>`
             )}
             <div class="items">
-              ${(c.floors ?? []).length > 1 ? this._renderSwitcherHandle(c) : nothing}
+              ${(c.floors ?? []).length > 1 || (c.floors ?? []).some((f) => floorSummaryShown(f, c.floorSummary))
+                ? this._renderSwitcherHandle(c)
+                : nothing}
               ${floor.texts.map((t) => this._renderTextOverlay(t, c, overlay))}
               ${floor.openings
                 .filter((o) => hasShutterMark(o))
@@ -6576,7 +6579,7 @@ export class FloorplanCardEditor extends LitElement {
     return html`
       <!-- Appearance only matters once there is a switcher to see; a
            one-floor plan would store a choice with no visible result. -->
-      ${floors.length > 1
+      ${floors.length > 1 || floors.some((f) => floorSummaryShown(f, this._config.floorSummary))
         ? html`
           <div class="row">
             <label for="floor-switcher-style">Style</label>
@@ -6602,7 +6605,7 @@ export class FloorplanCardEditor extends LitElement {
         : nothing}
       <div class="row col">
         <label>Position</label>
-        ${floors.length > 1
+        ${floors.length > 1 || floors.some((f) => floorSummaryShown(f, this._config.floorSummary))
           ? html`<span class="hint"
                 >${at
                   ? "Drag it on the canvas, or type the point here."
@@ -6656,7 +6659,7 @@ export class FloorplanCardEditor extends LitElement {
                   </div>`
                 : nothing}`
           : html`<span class="hint"
-              >A plan with one floor draws no switcher. Add a second floor and it appears
+              >A plan with one floor draws no switcher unless floor summary is enabled. Add a second floor or enable floor summary and it appears
               here.</span
             >`}
       </div>
