@@ -80,7 +80,7 @@ import { projectPlanPoint, projectedCanvasSize, type DisplayFrame } from "./proj
 // imports from there — the same trade `pointInPolygon` made in the other
 // direction. Re-exported so it reads as one of these helpers at every call
 // site, which is what it is.
-import { floorPanels, openingIsPassage, openingIsSkylight } from "./types";
+import { openingIsPassage, openingIsSkylight } from "./types";
 import { moonIllumination, moonPosition } from "./moon";
 export { openingIsPassage, openingIsSkylight };
 
@@ -239,11 +239,6 @@ export function collectWatchedEntities(c: FloorplanCardConfig): Set<string> {
     if (f.summary?.temperatureEntity) ids.add(f.summary.temperatureEntity);
     if (f.summary?.humidityEntity) ids.add(f.summary.humidityEntity);
     if (f.summary?.presenceEntity) ids.add(f.summary.presenceEntity);
-    for (const p of floorPanels(f)) {
-      for (const m of p.metrics ?? []) {
-        if (m.entity) ids.add(m.entity);
-      }
-    }
   }
   return ids;
 }

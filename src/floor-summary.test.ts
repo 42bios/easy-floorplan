@@ -3,14 +3,11 @@ import {
   detectFloorSensors,
   calculateFloorAverage,
   computeFloorSummary,
-  resolvePanelMetrics,
-  resolvePanelAnchor,
-  computeLeaderLinePath,
   convertTemperature,
   normalizeTempUnit,
   formatMetricValue,
 } from "./floor-summary";
-import type { Floor, FloorInfoPanel, FloorSummaryCardConfig, RenderHass } from "./types";
+import type { Floor, FloorSummaryCardConfig, RenderHass } from "./types";
 import { makeFloor } from "./types";
 
 function mockHass(states: Record<string, any> = {}): RenderHass {
@@ -104,7 +101,11 @@ describe("detectFloorSensors", () => {
           secondaryEntity: "sensor.living_room_humidity",
           x: 100,
           y: 100,
-          readings: [{ entity: "binary_sensor.living_room_motion" }],
+          readings: [
+            { entity: "binary_sensor.living_room_motion" },
+            { entity: "sensor.outdoor_temperature" },
+            { entity: "person.john" },
+          ],
         },
         {
           id: "item_2",
@@ -146,17 +147,6 @@ describe("detectFloorSensors", () => {
             max: 200,
             presence: { entity: "binary_sensor.desk_occupancy" },
           },
-        },
-      ],
-      panels: [
-        {
-          id: "panel_1",
-          x: 500,
-          y: 200,
-          metrics: [
-            { entity: "sensor.outdoor_temperature" },
-            { entity: "person.john" },
-          ],
         },
       ],
     };
@@ -551,245 +541,6 @@ describe("computeFloorSummary", () => {
     const summary = computeFloorSummary(floor, hass);
     expect(summary.temperature.value).toBe(21.0);
     expect(summary.temperature.entityIds).toEqual(["sensor.living_temp"]);
-  });
-});
-
-describe("resolvePanelMetrics", () => {
-  it("resolves panel metrics with entity states, units, and friendly names", () => {
-    const panel: FloorInfoPanel = {
-      id: "panel_hud",
-      x: 100,
-      y: 100,
-      metrics: [
-        { entity: "sensor.workstation_power", label: "Power Draw", icon: "mdi:flash" },
-        { entity: "sensor.workstation_temp" },
-        { entity: "sensor.offline_device" },
-      ],
-    };
-
-    const hass = mockHass({
-      "sensor.workstation_power": {
-        state: "285",
-        attributes: { unit_of_measurement: "W", friendly_name: "Workstation Power" },
-      },
-      "sensor.workstation_temp": {
-        state: "23.2",
-        attributes: { unit_of_measurement: "°C", friendly_name: "Workstation Ambient", icon: "mdi:thermometer" },
-      },
-      "sensor.offline_device": {
-        state: "unavailable",
-        attributes: {},
-      },
-    });
-
-    const metrics = resolvePanelMetrics(panel, hass);
-    expect(metrics.length).toBe(3);
-
-    expect(metrics[0]!).toEqual({
-      entity: "sensor.workstation_power",
-      label: "Power Draw",
-      state: "285",
-      value: "285 W",
-      unit: "W",
-      icon: "mdi:flash",
-      unavailable: false,
-    });
-
-    expect(metrics[1]!).toEqual({
-      entity: "sensor.workstation_temp",
-      label: "Workstation Ambient",
-      state: "23.2",
-      value: "23.2 °C",
-      unit: "°C",
-      icon: "mdi:thermometer",
-      unavailable: false,
-    });
-
-    expect(metrics[2]!.unavailable).toBe(true);
-    expect(metrics[2]!.value).toBe("unavailable");
-  });
-
-  it("leaves out a metric row that has no entity yet", () => {
-    const panel: FloorInfoPanel = {
-      id: "p1",
-      x: 0,
-      y: 0,
-      metrics: [{ entity: "sensor.a" }, { entity: "" }],
-    };
-    const hass = mockHass({ "sensor.a": { state: "1", attributes: {} } });
-    const rows = resolvePanelMetrics(panel, hass);
-    expect(rows.map((r) => r.entity)).toEqual(["sensor.a"]);
-  });
-
-  it("reads custom attributes when attribute is configured", () => {
-    const panel: FloorInfoPanel = {
-      id: "panel_ac",
-      x: 100,
-      y: 100,
-      metrics: [
-        { entity: "climate.ac", attribute: "current_temperature", label: "Current Temp", unit: "°C" },
-      ],
-    };
-
-    const hass = mockHass({
-      "climate.ac": {
-        state: "cool",
-        attributes: { current_temperature: 22.5 },
-      },
-    });
-
-    const metrics = resolvePanelMetrics(panel, hass);
-    expect(metrics[0]!.value).toBe("22.5");
-    expect(metrics[0]!.unit).toBe("°C");
-  });
-});
-
-describe("resolvePanelAnchor", () => {
-  const floor: Floor = {
-    ...makeFloor("Test Floor"),
-    areas: [
-      {
-        id: "living_room",
-        name: "Living Room",
-        points: [
-          { x: 0, y: 0 },
-          { x: 100, y: 0 },
-          { x: 100, y: 100 },
-          { x: 0, y: 100 },
-        ],
-      },
-    ],
-    furniture: [
-      {
-        id: "sofa_1",
-        type: "sofa",
-        x: 50,
-        y: 60,
-        w: 40,
-        h: 20,
-        angle: 0,
-      },
-    ],
-    roofs: [
-      {
-        id: "roof_main",
-        type: "gable",
-        points: [
-          { x: 0, y: 0 },
-          { x: 100, y: 0 },
-          { x: 100, y: 100 },
-          { x: 0, y: 100 },
-        ],
-        height: 35,
-      },
-    ],
-  };
-
-  it("returns explicit anchor coordinate when specified", () => {
-    const panel: FloorInfoPanel = {
-      id: "p1",
-      x: 150,
-      y: 150,
-      anchor: { x: 42, y: 77 },
-    };
-    expect(resolvePanelAnchor(panel, floor)).toEqual({ x: 42, y: 77 });
-  });
-
-  it("resolves area centroid when targetId points to an area", () => {
-    const panel: FloorInfoPanel = {
-      id: "p1",
-      x: 150,
-      y: 150,
-      targetId: "living_room",
-    };
-    const anchor = resolvePanelAnchor(panel, floor);
-    expect(anchor).toBeDefined();
-    expect(anchor?.x).toBe(50);
-    expect(anchor?.y).toBe(50);
-  });
-
-  it("resolves furniture position when targetId points to a furniture item", () => {
-    const panel: FloorInfoPanel = {
-      id: "p1",
-      x: 150,
-      y: 150,
-      targetId: "sofa_1",
-    };
-    const anchor = resolvePanelAnchor(panel, floor);
-    expect(anchor).toEqual({ x: 50, y: 60 });
-  });
-
-  it("resolves enclosing area centroid when targetType is area", () => {
-    const panel: FloorInfoPanel = {
-      id: "p1",
-      x: 30,
-      y: 40,
-      targetType: "area",
-    };
-    const anchor = resolvePanelAnchor(panel, floor);
-    expect(anchor).toBeDefined();
-    expect(anchor?.x).toBe(50);
-    expect(anchor?.y).toBe(50);
-  });
-
-  it("falls back to the nearest room when an area panel sits outside every room", () => {
-    const twoRooms: Floor = {
-      ...floor,
-      areas: [
-        ...(floor.areas ?? []),
-        { id: "study", name: "Study", points: [{ x: 300, y: 0 }, { x: 400, y: 0 }, { x: 400, y: 100 }, { x: 300, y: 100 }] },
-      ],
-    };
-    const panel: FloorInfoPanel = { id: "p1", x: 280, y: 160, targetType: "area" };
-    expect(resolvePanelAnchor(panel, twoRooms)).toEqual({ x: 350, y: 50 });
-    expect(resolvePanelAnchor(panel, { ...twoRooms, areas: [] })).toBeUndefined();
-  });
-
-  it("resolves roof centroid when targetId points to a roof", () => {
-    const panel: FloorInfoPanel = {
-      id: "p1",
-      x: 150,
-      y: 150,
-      targetId: "roof_main",
-    };
-    const anchor = resolvePanelAnchor(panel, floor);
-    expect(anchor).toBeDefined();
-    expect(anchor?.x).toBe(50);
-    expect(anchor?.y).toBe(50);
-  });
-
-  it("resolves enclosing roof centroid when targetType is roof", () => {
-    const panel: FloorInfoPanel = {
-      id: "p1",
-      x: 30,
-      y: 40,
-      targetType: "roof",
-    };
-    const anchor = resolvePanelAnchor(panel, floor);
-    expect(anchor).toBeDefined();
-    expect(anchor?.x).toBe(50);
-    expect(anchor?.y).toBe(50);
-  });
-
-  it("returns undefined when no target or anchor exists", () => {
-    const panel: FloorInfoPanel = {
-      id: "p1",
-      x: 200,
-      y: 200,
-    };
-    expect(resolvePanelAnchor(panel, floor)).toBeUndefined();
-  });
-});
-
-describe("computeLeaderLinePath", () => {
-  it("draws straight line for nearly coincident points", () => {
-    expect(computeLeaderLinePath({ x: 10, y: 10 }, { x: 11, y: 11 })).toBe("M 10 10 L 11 11");
-  });
-
-  it("computes stepped angled path from anchor to panel", () => {
-    const path = computeLeaderLinePath({ x: 100, y: 100 }, { x: 200, y: 150 });
-    expect(path.startsWith("M 100 100 L ")).toBe(true);
-    expect(path.endsWith(" L 200 150")).toBe(true);
   });
 });
 
