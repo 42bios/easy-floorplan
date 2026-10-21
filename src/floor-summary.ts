@@ -267,13 +267,14 @@ export function detectFloorSensors(
     const unit = attrs.unit_of_measurement as string | undefined;
     const domain = entityId.split(".")[0];
 
-    // Temperature detection: trust the device class and a temperature unit
-    // only. A name match ("temp") also catches a probe's own battery or
-    // signal sensor, which then gets averaged into the floor temperature.
+    // Temperature detection: trust the device class and a standard temperature unit (°C / °F).
+    // Kelvin (K) is only accepted together with device_class: temperature, so colour-temperature
+    // sensors (e.g. 4000 K) in linked rooms are not averaged into room temperature.
+    const tempUnit = normalizeTempUnit(unit);
     const isTemp =
       domain === "climate" ||
       (domain === "sensor" &&
-        (devClass === "temperature" || normalizeTempUnit(unit) !== undefined));
+        (devClass === "temperature" || tempUnit === "C" || tempUnit === "F"));
 
     if (isTemp) {
       result.temperature.push(entityId);
@@ -300,8 +301,9 @@ export function detectFloorSensors(
       result.presence.push(entityId);
     }
 
-    // Light detection
-    const isLight = domain === "light" || devClass === "light";
+    // Light detection: controllable lights only (light domain).
+    // A binary_sensor with device_class: light detects ambient daylight, not a fixture.
+    const isLight = domain === "light";
     if (isLight) {
       result.lights.push(entityId);
     }
@@ -363,6 +365,9 @@ export function calculateFloorAverage(
           break;
         }
       }
+    }
+    if (!targetUnit && candidates.some((id) => id.startsWith("climate."))) {
+      targetUnit = "°";
     }
   }
 
@@ -438,16 +443,7 @@ export function computeFloorSummary(
   config?: FloorSummaryCardConfig,
   haEntityIds?: readonly string[]
 ): FloorSummaryData {
-  const hasExplicitConfig = !!(
-    floor.summary?.temperatureEntity ||
-    floor.summary?.humidityEntity ||
-    floor.summary?.presenceEntity ||
-    floor.summary?.customText
-  );
-  const enabled =
-    floor.summary?.enabled !== undefined
-      ? floor.summary.enabled
-      : (config?.enabled ?? hasExplicitConfig);
+  const enabled = floorSummaryShown(floor, config);
 
   const decimals = config?.decimals ?? DEFAULT_FLOOR_SUMMARY_DECIMALS;
   const exclude = floor.summary?.excludeEntities;
@@ -466,7 +462,7 @@ export function computeFloorSummary(
         : st.state;
       const num = typeof rawVal === "number" ? rawVal : parseFloat(String(rawVal));
       if (!Number.isNaN(num) && Number.isFinite(num)) {
-        const unit = (st.attributes?.unit_of_measurement as string | undefined) ?? "°C";
+        const unit = (st.attributes?.unit_of_measurement as string | undefined) ?? "°";
         const factor = Math.pow(10, decimals);
         const rounded = Math.round(num * factor) / factor;
         tempResult = {
@@ -546,10 +542,15 @@ export function computeFloorSummary(
         const num = parseFloat(s);
         if (s === "on" || s === "home" || s === "occupied" || (!isNaN(num) && num > 0)) {
           presenceActive = true;
-          presenceCount++;
+          if (id.startsWith("person.")) {
+            presenceCount++;
+          }
           presenceEntities.push(id);
         }
       }
+    }
+    if (presenceActive && presenceCount === 0) {
+      presenceCount = 1;
     }
   }
 
@@ -633,7 +634,7 @@ export function computeFloorSummary(
     statParts.push(`Humidity ${humidResult.formatted}`);
   }
   if (presenceActive) {
-    statParts.push(`${presenceCount} present`);
+    statParts.push(presenceCount > 1 ? `${presenceCount} present` : "Occupied");
   }
   if (lightsOn > 0) {
     statParts.push(`${lightsOn} ${lightsOn === 1 ? "light" : "lights"} on`);

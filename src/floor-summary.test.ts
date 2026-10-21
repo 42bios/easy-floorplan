@@ -6,6 +6,7 @@ import {
   convertTemperature,
   normalizeTempUnit,
   formatMetricValue,
+  floorSummaryShown,
 } from "./floor-summary";
 import type { Floor, FloorSummaryCardConfig, RenderHass } from "./types";
 import { makeFloor } from "./types";
@@ -542,5 +543,128 @@ describe("computeFloorSummary", () => {
     expect(summary.temperature.value).toBe(21.0);
     expect(summary.temperature.entityIds).toEqual(["sensor.living_temp"]);
   });
+
+  it("enables floor summary when card-level floorSummary has enabled: false but floor specifies a helper", () => {
+    const floor: Floor = {
+      ...makeFloor("Living Floor"),
+      summary: {
+        temperatureEntity: "sensor.living_temp",
+      },
+    };
+    const cardConfig: FloorSummaryCardConfig = {
+      enabled: false,
+    };
+    const hass = mockHass({
+      "sensor.living_temp": { state: "21.5", attributes: { unit_of_measurement: "°C" } },
+    });
+
+    expect(floorSummaryShown(floor, cardConfig)).toBe(true);
+    const summary = computeFloorSummary(floor, hass, cardConfig);
+    expect(summary.enabled).toBe(true);
+    expect(summary.temperature.value).toBe(21.5);
+    expect(summary.badgeText).toBe("21.5°C");
+  });
+
+  it("does not average colour-temperature Kelvin sensors into temperature without device_class: temperature", () => {
+    const floor: Floor = {
+      ...makeFloor("Office"),
+      items: [
+        { id: "s1", kind: "sensor", entity: "sensor.desk_temperature", x: 10, y: 10 },
+        { id: "s2", kind: "sensor", entity: "sensor.desk_lamp_color_temp", x: 20, y: 20 },
+      ],
+    };
+    const hass = mockHass({
+      "sensor.desk_temperature": {
+        state: "21.0",
+        attributes: { device_class: "temperature", unit_of_measurement: "°C" },
+      },
+      "sensor.desk_lamp_color_temp": {
+        state: "4000",
+        attributes: { unit_of_measurement: "K" }, // missing device_class: temperature
+      },
+    });
+
+    const detected = detectFloorSensors(floor, hass);
+    expect(detected.temperature).toEqual(["sensor.desk_temperature"]);
+    expect(detected.temperature).not.toContain("sensor.desk_lamp_color_temp");
+
+    const summary = computeFloorSummary(floor, hass, { enabled: true });
+    expect(summary.temperature.value).toBe(21.0);
+    expect(summary.temperature.formatted).toBe("21.0°C");
+  });
+
+  it("labels climate entities with degree symbol without forcing °C when unit_of_measurement is absent", () => {
+    const floor: Floor = {
+      ...makeFloor("Living Room"),
+      summary: {
+        enabled: true,
+        temperatureEntity: "climate.thermostat_f",
+      },
+    };
+    const hass = mockHass({
+      "climate.thermostat_f": {
+        state: "heat",
+        attributes: {
+          current_temperature: 72.0,
+        },
+      },
+    });
+
+    const summary = computeFloorSummary(floor, hass);
+    expect(summary.temperature.value).toBe(72.0);
+    expect(summary.temperature.unit).toBe("°");
+    expect(summary.temperature.formatted).toBe("72.0°");
+    expect(summary.badgeText).toBe("72.0°");
+  });
+
+  it("does not treat binary_sensor with device_class: light as a controllable fixture", () => {
+    const floor: Floor = {
+      ...makeFloor("Garden Floor"),
+      items: [
+        { id: "s1", kind: "sensor", entity: "binary_sensor.daylight", x: 10, y: 10 },
+        { id: "s2", kind: "sensor", entity: "light.patio", x: 20, y: 20 },
+      ],
+    };
+    const hass = mockHass({
+      "binary_sensor.daylight": {
+        state: "on",
+        attributes: { device_class: "light" },
+      },
+      "light.patio": {
+        state: "on",
+        attributes: {},
+      },
+    });
+
+    const detected = detectFloorSensors(floor, hass);
+    expect(detected.lights).toEqual(["light.patio"]);
+    expect(detected.lights).not.toContain("binary_sensor.daylight");
+
+    const summary = computeFloorSummary(floor, hass, { enabled: true });
+    expect(summary.lights.onCount).toBe(1);
+  });
+
+  it("treats multiple discovered motion sensors as presence occupied without inflating person count", () => {
+    const floor: Floor = {
+      ...makeFloor("Hall"),
+      items: [
+        { id: "m1", kind: "sensor", entity: "binary_sensor.motion_1", x: 10, y: 10 },
+        { id: "m2", kind: "sensor", entity: "binary_sensor.motion_2", x: 20, y: 20 },
+        { id: "m3", kind: "sensor", entity: "binary_sensor.motion_3", x: 30, y: 30 },
+      ],
+    };
+    const hass = mockHass({
+      "binary_sensor.motion_1": { state: "on", attributes: { device_class: "motion" } },
+      "binary_sensor.motion_2": { state: "on", attributes: { device_class: "motion" } },
+      "binary_sensor.motion_3": { state: "on", attributes: { device_class: "motion" } },
+    });
+
+    const summary = computeFloorSummary(floor, hass, { enabled: true });
+    expect(summary.presence.active).toBe(true);
+    expect(summary.presence.count).toBe(1);
+    expect(summary.presence.formatted).toBe("Occupied");
+    expect(summary.badgeText).toBe("👤");
+  });
 });
+
 

@@ -4308,15 +4308,9 @@ export class FloorplanCardEditor extends LitElement {
                   </div>
                   <!-- Floor Summary Settings (issue #234) -->
                   ${(() => {
-                    const summaryEnabled =
-                      floor?.summary?.enabled !== undefined
-                        ? floor.summary.enabled
-                        : !!(
-                            floor?.summary?.temperatureEntity ||
-                            floor?.summary?.humidityEntity ||
-                            floor?.summary?.presenceEntity ||
-                            this._config.floorSummary?.enabled
-                          );
+                    const summaryEnabled = floor
+                      ? floorSummaryShown(floor, this._config.floorSummary)
+                      : false;
                     return html`
                       <div class="pop-row" style="margin-top: 6px;">
                         <label>Summary enabled</label>

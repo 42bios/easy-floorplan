@@ -59,6 +59,8 @@ Use `summary.excludeEntities` to exclude specific sensors (for example, a garage
 
 ## Visual Editor Integration
 
-1. Click the floor settings button (the floor name dropdown or pencil/cog icon) in the editor header.
+![Floor Settings Popover](img/floor-summary-popover.png)
+
+1. Click the floor settings button (the cog icon beside the floor name) in the editor header.
 2. Toggle **Summary enabled** with a single click.
 3. When enabled, optional helper entity pickers (**Temp helper**, **Humidity helper**, **Presence helper**) expand immediately if you prefer to use dedicated Home Assistant Min/Max helpers. When disabled, the helpers remain hidden and summary computations for that floor are omitted.
