@@ -1770,7 +1770,50 @@ export interface Floor {
   trackers: Tracker[];
   areas: Area[];
   roofs?: Roof[];
+  /** Summary metrics configuration for this floor (issue #234). */
+  summary?: FloorSummaryConfig;
 }
+
+/** Card-level floor summary configuration (issue #234). */
+export interface FloorSummaryCardConfig {
+  /** Master toggle to show summaries (default: false). */
+  enabled?: boolean;
+  /** Metrics to display in the floor buttons (default: all five). */
+  metrics?: Array<"temperature" | "humidity" | "presence" | "lights" | "windows">;
+  /** Number of decimal places for temperature (default: 1). */
+  decimals?: number;
+}
+
+/** Per-floor summary configuration (issue #234). */
+export interface FloorSummaryConfig {
+  /** Enable/disable summary for this specific floor (inherits card default if unset). */
+  enabled?: boolean;
+  /** Explicit entity override for temperature (bypasses auto-calculation). */
+  temperatureEntity?: string;
+  /** Explicit entity override for humidity (bypasses auto-calculation). */
+  humidityEntity?: string;
+  /** Explicit entity override for presence/occupancy. */
+  presenceEntity?: string;
+  /**
+   * Entity IDs on this floor to exclude from auto-aggregation
+   * (e.g. garage temperature, outdoor patio sensor).
+   */
+  excludeEntities?: string[];
+  /** Optional custom badge/subtitle string template (e.g. "21.5° | Eco"). */
+  customText?: string;
+}
+
+/** Default floor summary decimal precision */
+export const DEFAULT_FLOOR_SUMMARY_DECIMALS = 1;
+
+/** Default metrics displayed in floor switcher summary */
+export const DEFAULT_FLOOR_SUMMARY_METRICS: Array<"temperature" | "humidity" | "presence" | "lights" | "windows"> = [
+  "temperature",
+  "humidity",
+  "presence",
+  "lights",
+  "windows",
+];
 
 /** Sizing mode for the HTML overlay layer. See {@link FloorplanCardConfig.overlayScale}. */
 export type OverlayScale = "fixed" | "plan";
@@ -2252,6 +2295,8 @@ export interface FloorplanCardConfig extends LovelaceCardConfig {
   trackers?: Tracker[];
   areas?: Area[];
   roofs?: Roof[];
+  /** Floor summary configuration (issue #234). */
+  floorSummary?: FloorSummaryCardConfig;
   /**
    * Symbols this plan defines for itself (issue #90), keyed by id and merged
    * over the shipped `furniture/` library — so you can draw a piece nobody has
@@ -2332,6 +2377,7 @@ export function haFloorsOf(hass: unknown): HaFloorInfo[] {
 export interface HaAreaInfo {
   area_id: string;
   name: string;
+  floor_id?: string | null;
 }
 
 /**

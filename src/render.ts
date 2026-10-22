@@ -236,6 +236,9 @@ export function collectWatchedEntities(c: FloorplanCardConfig): Set<string> {
         if (s?.presence?.entity) ids.add(s.presence.entity);
       }
     }
+    if (f.summary?.temperatureEntity) ids.add(f.summary.temperatureEntity);
+    if (f.summary?.humidityEntity) ids.add(f.summary.humidityEntity);
+    if (f.summary?.presenceEntity) ids.add(f.summary.presenceEntity);
   }
   return ids;
 }

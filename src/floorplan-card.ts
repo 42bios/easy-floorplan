@@ -18,6 +18,11 @@ import type {
   Roof,
   AreaPoint,
 } from "./types";
+import {
+  computeFloorSummary,
+  floorHaEntityIds,
+  floorSummaryShown,
+} from "./floor-summary";
 import { buildRenderHass } from "./replay-history/render-state-service";
 import "./replay-history/history-timeline";
 import "./replay-history/replay-panel";
@@ -285,6 +290,16 @@ export class FloorplanCard extends LitElement {
    * from `_watchedEntities` on purpose — see `collectNamedEntities`.
    */
   private _nameEntities: Set<string> = new Set();
+  /**
+   * Entities the floor summaries find through linked HA areas and floors
+   * (issue #234), per floor id. Read from the HA registries, so recomputed
+   * when the config or a registry changes, not on every render.
+   */
+  private _summaryHaEntities = new Map<string, string[]>();
+  /** What {@link _summaryHaEntities} was computed from. */
+  private _summaryDiscoveryInputs?: readonly unknown[];
+  /** `_watchedEntities` plus every discovered summary entity: what a render reads. */
+  private _renderEntities: Set<string> = new Set();
   private readonly _replayController = new ReplayControllerImpl({
     getConfig: () => this._config,
     getHass: () => this.hass,
@@ -391,6 +406,8 @@ export class FloorplanCard extends LitElement {
     };
     this._watchedEntities = collectWatchedEntities(this._config);
     this._nameEntities = collectNamedEntities(this._config);
+    this._summaryDiscoveryInputs = undefined;
+    this._syncSummaryDiscovery();
     this._syncMoonClock();
     this._syncHistoryServiceContext();
     this._replayController.clearConfigColorCache();
@@ -447,11 +464,12 @@ export class FloorplanCard extends LitElement {
    * for most updates nothing on this plan moved. Skip those renders entirely.
    */
   protected shouldUpdate(changed: PropertyValues): boolean {
+    const discoveryChanged = this._syncSummaryDiscovery();
     // Anything but a pure hass tick (config change, floor switch, first render).
     if (!(changed.size === 1 && changed.has("hass"))) return true;
     const prev = changed.get("hass") as HomeAssistant | undefined;
-    if (!prev || !this.hass) return true;
-    if (hassRenderInputsChanged(prev, this.hass, this._watchedEntities)) return true;
+    if (!prev || !this.hass || discoveryChanged) return true;
+    if (hassRenderInputsChanged(prev, this.hass, this._renderEntities)) return true;
     // The floor image can follow light/dark mode (issue #366).
     if (hassDarkMode(prev) !== hassDarkMode(this.hass)) return true;
     // Entities that name a button but draw nothing. They have to invalidate a
@@ -463,6 +481,36 @@ export class FloorplanCard extends LitElement {
       if (prev.states[id] !== this.hass.states[id]) return true;
     }
     return false;
+  }
+
+  /**
+   * Find the entities each summarised floor gets from its linked HA areas and
+   * floor (issue #234), and watch them with the rest of the plan. Runs only
+   * when the config or one of the HA registries has changed. Returns whether
+   * the set of discovered entities changed.
+   */
+  private _syncSummaryDiscovery(): boolean {
+    const c = this._config;
+    const reg = this.hass as unknown as { entities?: unknown; devices?: unknown; areas?: unknown } | undefined;
+    const inputs = [c, reg?.entities, reg?.devices, reg?.areas];
+    const prev = this._summaryDiscoveryInputs;
+    if (prev && inputs.every((v, i) => v === prev[i])) return false;
+    this._summaryDiscoveryInputs = inputs;
+    const perFloor = new Map<string, string[]>();
+    const all = new Set<string>();
+    if (c && reg) {
+      for (const f of getFloors(c)) {
+        if (!floorSummaryShown(f, c.floorSummary)) continue;
+        const ids = floorHaEntityIds(f, reg);
+        if (!ids.length) continue;
+        perFloor.set(f.id, ids);
+        for (const id of ids) all.add(id);
+      }
+    }
+    const before = this._renderEntities;
+    this._summaryHaEntities = perFloor;
+    this._renderEntities = all.size ? new Set([...this._watchedEntities, ...all]) : this._watchedEntities;
+    return before.size !== this._renderEntities.size || [...this._renderEntities].some((id) => !before.has(id));
   }
 
   /**
@@ -1784,7 +1832,7 @@ export class FloorplanCard extends LitElement {
     const c = this._displayConfig();
     const lineArt = c.appearance === "line-art";
     const replayState = this._replayController.getRenderState();
-    const renderHass = buildRenderHass(this.hass, this._watchedEntities, this._replayController.historyService(), replayState.enabled, replayState.currentTime);
+    const renderHass = buildRenderHass(this.hass, this._renderEntities, this._replayController.historyService(), replayState.enabled, replayState.currentTime);
     const floors = getFloors(c);
     const active = this._activeFloor(c);
     const bgImage = floorImage(active, hassDarkMode(this.hass));
@@ -2440,8 +2488,8 @@ export class FloorplanCard extends LitElement {
                than one that overlaps the drawing for as long as a zoom lasts —
                and the position is chosen against the view people spend their
                time in, which is the unzoomed one. -->
-          ${floors.length > 1
-        ? this._renderFloorSwitcher(floors, active, c, rot)
+          ${floors.length > 1 || floors.some((f) => floorSummaryShown(f, c.floorSummary))
+        ? this._renderFloorSwitcher(floors, active, c, rot, renderHass)
         : nothing}
         </div>
         </div>
@@ -2473,6 +2521,7 @@ export class FloorplanCard extends LitElement {
     active: Floor,
     c: FloorplanCardConfig,
     rot: number = 0,
+    renderHass?: RenderHass,
   ): TemplateResult {
     // Where the author put it (issue #281), mapped into the displayed frame
     // like every other anchor so a rotated card keeps it in the same corner of
@@ -2484,9 +2533,18 @@ export class FloorplanCard extends LitElement {
       ? rotatePlanPoint(at.x, at.y, cssNumber(c.width, DEFAULT_WIDTH), cssNumber(c.height, DEFAULT_HEIGHT), rot)
       : undefined;
     const dims = rotatedCanvasSize(cssNumber(c.width, DEFAULT_WIDTH), cssNumber(c.height, DEFAULT_HEIGHT), rot);
+    // The discovered HA-area entities come from the registries, which
+    // renderHass does not carry; their states are in it, because they are
+    // watched (`_syncSummaryDiscovery`).
+    const summaries = floors.map((f) => {
+      const s = floorSummaryShown(f, c.floorSummary)
+        ? computeFloorSummary(f, renderHass, c.floorSummary, this._summaryHaEntities.get(f.id) ?? [])
+        : undefined;
+      return s?.enabled && s.badgeText ? s : undefined;
+    });
     return html`
       <div
-        class="floor-switcher ${floorSwitcherClasses(c)} ${placed ? "placed" : ""}"
+        class="floor-switcher ${floorSwitcherClasses(c)} ${placed ? "placed" : ""} ${summaries.some(Boolean) ? "has-summaries" : ""}"
         part="floor-switcher"
         role="group"
         aria-label="Select floor"
@@ -2494,24 +2552,32 @@ export class FloorplanCard extends LitElement {
         ? `left:${(placed.x / dims.w) * 100}%; top:${(placed.y / dims.h) * 100}%;`
         : nothing}
       >
-        ${floors.map((f) => {
+        ${floors.map((f, i) => {
           // Per-floor accent (issue #67): applied only while active so the
           // resting buttons stay theme-neutral. cssColor gates the config
           // string; no custom color falls back to the theme primary.
           const accent = f.id === active.id ? cssColor(f.color) : undefined;
+          const summary = summaries[i];
+          const titleText = summary?.tooltip || f.name;
+
           return html`
             <button
               type="button"
-              class="floor-button ${f.id === active.id ? "active" : ""}"
+              class="floor-button ${f.id === active.id ? "active" : ""} ${summary ? "has-summary" : ""}"
               part=${f.id === active.id ? "floor-button floor-button-active" : "floor-button"}
               data-floor-id=${f.id}
-              title=${f.name}
-              aria-label=${f.name}
+              title=${titleText}
+              aria-label=${titleText}
               aria-pressed=${f.id === active.id ? "true" : "false"}
               style=${accent ? `--fp-floor-accent:${accent};` : nothing}
               @click=${() => this._goToFloor(floors, f.id)}
             >
-              ${f.short || f.name}
+              ${summary
+                ? html`
+                    <span class="floor-button-title">${f.short || f.name}</span>
+                    <span class="floor-button-summary">${summary.badgeText}</span>
+                  `
+                : f.short || f.name}
             </button>
           `;
         })}
