@@ -25,7 +25,7 @@ floors:
 
 ### Single-Floor Plans
 
-Single-floor plans (such as apartments or single-storey homes) hide the floor switcher by default because floor navigation is not needed. When floor summary is enabled (either via `floorSummary.enabled: true` on the card or `summary.enabled: true` on the floor), the switcher is automatically displayed with a single button, providing an at-a-glance summary chip for the entire home without needing a multi-floor configuration.
+Single-floor plans (such as apartments or single-storey homes) hide the floor switcher by default because floor navigation is not needed. When floor summary is enabled (either via `floorSummary.enabled: true` on the card, `summary.enabled: true` on the floor, or by configuring any floor helper entity or `customText`), the switcher is automatically displayed with a single button, providing an at-a-glance summary chip for the entire home without needing a multi-floor configuration.
 
 ## Automatic Sensor Discovery
 
@@ -37,9 +37,9 @@ Without an explicit helper configured, the card discovers candidate sensors on t
 - **Floor-level linkage**: every entity in the Home Assistant areas on the floor's linked Home Assistant floor (`floor.haFloor`).
 
 Sensors are recognized strictly by their `device_class` and unit, never by entity name alone, ensuring non-telemetry sensors (e.g. battery or signal strength) are not mistakenly counted:
-- **Temperature**: `sensor` entities with `device_class: temperature` or a °C/°F/K unit, and `climate` entities (`current_temperature`). Mixed units (°C and °F) are automatically converted to match the predominant unit and rounded to `decimals`.
+- **Temperature**: `sensor` entities with `device_class: temperature`, a `°C`/`°F` unit (or `K` when accompanied by `device_class: temperature`), and `climate` entities (`current_temperature`). When mixed units are encountered, temperatures are converted to the unit of the first discovered entity with a unit and rounded to `decimals`.
 - **Humidity**: `sensor` entities with `device_class: humidity`, and `climate` entities with `current_humidity`.
-- **Presence**: `binary_sensor` entities with `device_class` `occupancy`, `motion`, or `presence`, plus `person` and `device_tracker` entities. Rendered as `👤 N`.
+- **Presence**: `binary_sensor` entities with `device_class` `occupancy`, `motion`, or `presence`, plus `person` and `device_tracker` entities. Discovered motion or occupancy sensors render as a plain `👤`, while `N` counts `person` entities only (`👤 N`).
 - **Lights on**: `light` entities that are on (`💡 N`).
 - **Openings**: physical openings drawn on the plan, and `door`, `window`, `garage_door`, or `opening` binary sensors that are currently open (`🪟 N`).
 
