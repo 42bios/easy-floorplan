@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { html, nothing } from "lit";
-import type { Area, FloorText, Furniture, FurnitureType, ItemKind, ItemReading } from "./types";
+import type { Area, FloorText, Furniture, ItemKind, ItemReading } from "./types";
 import { SKIN_ACCENT, SKIN_WALL, MAX_SKIN_WALL_WIDTH } from "./skins";
 import { MAX_AREA_ZOOM, DEFAULT_ZOOMED_OVERLAY_SCALE } from "./types";
 import {
@@ -170,7 +170,7 @@ import {
 import { buildRenderHass } from "./replay-history/render-state-service";
 import type { FloorplanCardConfig, Opening, RenderHass, Wall } from "./types";
 import { deadSpaces } from "./dead-space";
-import { symbolCatalog, symbolSize } from "./symbols";
+import { BUILTIN_SYMBOLS, symbolCatalog, symbolSize } from "./symbols";
 
 /**
  * Render a Lit template to the string it would emit, for asserting on markup.
@@ -1756,12 +1756,9 @@ describe("the sectional's L-shaped outline", () => {
 });
 
 describe("every furniture type renders and has a default size", () => {
-  const types: FurnitureType[] = [
-    "table", "roundTable", "desk", "chair", "sofa", "bed", "wardrobe", "rug",
-    "plant", "fridge", "stove", "sink", "toilet", "stairs", "tv",
-    "washer", "dryer", "dishwasher", "waterHeater", "airHandler", "bathtub",
-    "vanity", "sectional", "fishTank", "piano", "hotTub",
-  ];
+  // Derive coverage from the shipped catalogue so new symbols cannot be
+  // omitted from rendering/default-size checks by a stale manual list.
+  const types = Object.keys(BUILTIN_SYMBOLS);
 
   it("has a default size for each", () => {
     for (const t of types) {
@@ -2724,6 +2721,116 @@ describe("badgeValue (#106)", () => {
           badgeEntity: "secondary",
         }),
       ).toBe("44");
+    });
+  });
+
+  // Issue #359: the same brightness reading the label words as a percentage
+  // (HA's own attribute formatter) reached the badge as the raw 0-255 number.
+  describe("a light's brightness is a percentage, the way the label words it (#359)", () => {
+    const light = (brightness: number) =>
+      hass({ "light.office": { state: "on", attributes: { brightness } } });
+
+    // The exact config from the issue: a brightness reading in the pool,
+    // badgeEntity pointing at it, the label turned off.
+    const issueItem = {
+      entity: "light.office",
+      readings: [{ attribute: "brightness" }],
+      badgeEntity: 0,
+    };
+
+    it("shows the issue's config as a percentage, not 0-255", () => {
+      expect(badgeValue(light(128), issueItem)).toBe("50%");
+    });
+
+    it.each([
+      [255, "100%"],
+      [128, "50%"],
+      [26, "10%"],
+      [13, "5%"],
+      [1, "0%"],
+      [0, "0%"],
+    ])("brightness %s reads %s", (raw, expected) => {
+      expect(badgeValue(light(raw), issueItem)).toBe(expected);
+    });
+
+    it("rounds the same way HA does, not to a whole step", () => {
+      // HA's formula is Math.round((v / 255) * 100): 101/255 is 39.6, which
+      // rounds up to 40 where truncation would print 39.
+      expect(badgeValue(light(101), issueItem)).toBe("40%");
+    });
+
+    it("converts the configured attribute on the device's own entity too", () => {
+      expect(
+        badgeValue(light(128), { entity: "light.office", attribute: "brightness" }),
+      ).toBe("50%");
+    });
+
+    it("keeps converting through the fallback chain, with no badgeEntity chosen", () => {
+      // "on" is not a number, so the chain reaches the brightness reading on
+      // its own: the pre-#136 behaviour, still what an unconfigured badge does.
+      expect(
+        badgeValue(light(77), { entity: "light.office", readings: [{ attribute: "brightness" }] }),
+      ).toBe("30%");
+    });
+
+    it.each([{}, { brightness: null }])("shows the icon when an off light has no numeric brightness (%j)", (attributes) => {
+      // Off lights may omit brightness or report null; neither is a number.
+      const h = hass({ "light.office": { state: "off", attributes } });
+      expect(badgeValue(h, issueItem)).toBeUndefined();
+    });
+
+    it("shows the icon when the brightness attribute is not a number", () => {
+      const h = hass({
+        "light.office": { state: "on", attributes: { brightness: "unavailable" } },
+      });
+      expect(badgeValue(h, issueItem)).toBeUndefined();
+    });
+
+    it("does not convert a brightness reading off a non-light entity", () => {
+      // The percentage is a property of HA's light domain attribute, not of
+      // the number: a sensor that reports a 0-255 reading keeps its raw value.
+      const h = hass({
+        "light.office": { state: "on", attributes: { brightness: 128 } },
+        "sensor.raw": { state: "128", attributes: { unit_of_measurement: "lx" } },
+      });
+      expect(badgeValue(h, { entity: "light.office", readings: [{ entity: "sensor.raw" }] }))
+        .toBe("128lx");
+    });
+
+    it.each([
+      { entity: "sensor.raw", attribute: "brightness" },
+      { entity: "light.office", readings: [{ entity: "sensor.raw", attribute: "brightness" }], badgeEntity: 0 },
+    ])("keeps another domain's brightness attribute raw (%j)", (item) => {
+      const h = hass({
+        "light.office": { state: "on", attributes: { brightness: 255 } },
+        "sensor.raw": { state: "unavailable", attributes: { brightness: 128 } },
+      });
+      expect(badgeValue(h, item)).toBe("128");
+    });
+
+    it("uses the reading entity's light domain even when the device is a sensor", () => {
+      const h = hass({
+        "sensor.raw": { state: "unavailable", attributes: {} },
+        "light.office": { state: "on", attributes: { brightness: 128 } },
+      });
+      expect(badgeValue(h, {
+        entity: "sensor.raw",
+        readings: [{ entity: "light.office", attribute: "brightness" }],
+        badgeEntity: 0,
+      })).toBe("50%");
+    });
+
+    it("leaves a non-brightness badge reading alone", () => {
+      const h = hass({
+        "light.office": { state: "on", attributes: { brightness: 128, color_temp: 300 } },
+      });
+      expect(
+        badgeValue(h, { entity: "light.office", attribute: "color_temp" }),
+      ).toBe("300");
+    });
+
+    it("reports the percent as badgeReading's text, with its source", () => {
+      expect(badgeReading(light(128), issueItem)).toEqual({ text: "50%", source: 0 });
     });
   });
 });
@@ -4274,6 +4381,53 @@ describe("renderArea", () => {
   it("keeps the resting opacity when activeOpacity is unset (#6)", () => {
     const markup = flattenMarkup(renderArea({ id: "a", points: square, opacity: 0.2 }, "#4caf50"));
     expect(markup).toContain("fill-opacity=0.2");
+  });
+
+  describe("with a room tint (roomTints: auto)", () => {
+    const tint = { color: "var(--fp-room-tint-2, #3f86c4)", opacity: 0.18 };
+
+    it("rests at the tint instead of the accent", () => {
+      const markup = flattenMarkup(renderArea({ id: "a", points: square }, undefined, tint));
+      expect(markup).toContain(`fill=${tint.color}`);
+      expect(markup).toContain("fill-opacity=0.18");
+      expect(markup).not.toContain(SKIN_ACCENT);
+    });
+
+    it("never paints over a room's own colour, even if a caller passes one", () => {
+      const markup = flattenMarkup(
+        renderArea({ id: "a", points: square, color: "#ff0000", opacity: 0.6 }, undefined, tint)
+      );
+      expect(markup).toContain("fill=#ff0000");
+      expect(markup).toContain("fill-opacity=0.6");
+    });
+
+    it("keeps an outdoor zone's default colour, as it would an explicit one", () => {
+      const markup = flattenMarkup(
+        renderArea({ id: "a", points: square, zoneKind: "lawn" }, undefined, tint)
+      );
+      expect(markup).toContain("fill=#4CAF50");
+      expect(markup).not.toContain("fill-opacity=0.18");
+    });
+
+    it("still tints an indoor zone, which has no default colour", () => {
+      const markup = flattenMarkup(
+        renderArea({ id: "a", points: square, zoneKind: "indoor" }, undefined, tint)
+      );
+      expect(markup).toContain(`fill=${tint.color}`);
+    });
+
+    it("gives way to a live fill and its activeOpacity", () => {
+      const a = { id: "a", points: square, activeOpacity: 0.5 };
+      const markup = flattenMarkup(renderArea(a, "#4caf50", tint));
+      expect(markup).toContain("fill=#4caf50");
+      expect(markup).toContain("fill-opacity=0.5");
+    });
+
+    it("stays the fill under highlight: border, where the live colour goes to the outline", () => {
+      const a = { id: "a", points: square, highlight: "border" as const };
+      const markup = flattenMarkup(renderArea(a, "#4caf50", tint));
+      expect(markup).toContain(`fill=${tint.color}`);
+    });
   });
 
   it("never strokes — the outline is renderAreaBorder's pass, above the walls", () => {

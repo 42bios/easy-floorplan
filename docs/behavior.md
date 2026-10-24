@@ -52,7 +52,7 @@ lock and it drives the door (issue #176):
 
 ```yaml
 openings:
-  - { id: front, type: door, x: 300, y: 100, length: 90, angle: 0, entity: lock.front_door }
+  - { id: front, type: door, 'x': 300, 'y': 100, length: 90, angle: 0, entity: lock.front_door }
 ```
 
 `unlocked` draws the door open, `locked` draws it shut. The in-between states follow the
@@ -115,8 +115,8 @@ items:
   - id: bath_humidity
     entity: sensor.bathroom_humidity
     kind: sensor
-    x: 300
-    y: 250
+    'x': 300
+    'y': 250
     showOnlyWhenZoomed: true
 ```
 
@@ -129,8 +129,8 @@ thermostat in the hall — name the room with `area`, by its `id` or its `name`:
 ```yaml
   - id: doorbell
     entity: binary_sensor.doorbell
-    x: 960
-    y: 560
+    'x': 960
+    'y': 560
     showOnlyWhenZoomed: true
     area: porch
 ```
@@ -172,8 +172,24 @@ Only furniture with a runnable action or a floor destination gets an icon.
 The icon shows a tap, hold or double-tap symbol according to the first gesture it
 supports, or an up/down staircase for floor navigation. Its tooltip lists all
 available gestures and names the entity or destination. The visible circle is its
-whole touch target: 34 screen pixels across, including after room zoom. It stays
-upright when the plan is rotated and sits on the raised furniture surface in 3D.
+whole touch target. It is sized like a device badge: 34 screen pixels across under
+`overlayScale: fixed`, or 34 canvas units under `overlayScale: plan`, so it shrinks
+with the drawing on a narrow card. Room zoom does not enlarge it. It stays upright
+when the plan is rotated and sits on the raised furniture surface in 3D.
+
+### Hiding the icon
+
+On a plan where many pieces carry an action, the icons can crowd it (issue #362). Set
+`showIcon: false` on a piece, or turn off **Action icon** under its **Behavior**, to
+drop the circle. The drawing itself then takes the piece's gestures, as furniture did
+before the icon existed: tapping it runs the action or changes floor, and only the room
+around it focuses the Area. Name, tooltip and keyboard tap carry over unchanged.
+
+```yaml
+furniture:
+  - { id: plant1, type: plant, 'x': 300, 'y': 220, w: 40, h: 40,
+      entity: sensor.plant_moisture, tap_action: { action: more-info }, showIcon: false }
+```
 
 `goToFloor` is to a piece what the zoom is to a room: the thing tapping its icon does
 when nothing else is configured. So the two compose rather than competing —
@@ -216,6 +232,25 @@ by the name its definition carries rather than its id — `cornerShowerCurved` i
 When gestures target different entities the tap wins, then the hold, then the double-tap,
 and a gesture that could not run never supplies the name.
 
+## Actions in YAML from the editor
+
+Some actions exist only in YAML — popup-card's `fire-dom-event`, for instance, carries
+keys HA's action dropdowns cannot show. In the editor, **Behavior → Show code editor**
+swaps the tap, hold and double-tap dropdowns for a YAML editor holding just those three
+actions, for the one device, opening, room or piece of furniture you have selected. There
+is no need to open the whole card's YAML:
+
+```yaml
+tap_action:
+  action: fire-dom-event
+  browser_mod:
+    service: browser_mod.popup
+    data: { title: Kitchen }
+```
+
+Any other key is refused with a message under the editor rather than half-applied.
+Deleting an action's lines clears it. **Show visual editor** switches back.
+
 ## Stairs that change floor
 
 A staircase already draws an arrow saying which way it goes. `goToFloor` makes that a
@@ -226,16 +261,47 @@ floors:
   - id: ground
     name: Ground floor
     furniture:
-      - { id: stairs_up, type: stairs, x: 640, y: 300, w: 80, h: 140, goToFloor: up }
+      - { id: stairs_up, type: stairs, 'x': 640, 'y': 300, w: 80, h: 140, goToFloor: up }
   - id: upstairs
     name: Upstairs
     furniture:
-      - { id: stairs_down, type: stairs, x: 640, y: 300, w: 80, h: 140, goToFloor: down }
+      - { id: stairs_down, type: stairs, 'x': 640, 'y': 300, w: 80, h: 140, goToFloor: down }
 ```
 
 Tap the stairs' up/down icon to change floor; the stair surface itself passes taps
 to the room. `up` is the next entry in `floors`, `down` the previous — the list is
 read bottom-to-top — and the icon's tooltip and accessible label name its destination.
+
+The **Go to floor** selector also offers direct destinations (issue #327):
+
+| Setting | Destination |
+| --- | --- |
+| `top` | Last entry in `floors` |
+| `bottom` | First entry in `floors` |
+| `main` | The configured `defaultFloor`, or the first floor when that id is unset or missing |
+| `{ floor: upstairs }` | The floor whose `id` is `upstairs` |
+
+![The Go to floor selector expanded to show relative, top, bottom, main and named floor destinations](img/floor-navigation-editor.jpg)
+
+The standalone editor's native fallback selector is expanded here to show every option.
+
+The editor lists each floor by name and id. A specific destination follows the id,
+so renaming or reordering floors keeps the link intact. An explicit object also
+allows a floor id such as `up` or `main` without confusing it with a navigation option.
+For example, an elevator on the ground floor can skip directly to the loft:
+
+```yaml
+goToFloor: { floor: loft }
+```
+
+![Before and after tapping the staircase icon: the card jumps directly from Ground to Loft](img/floor-navigation-jump.jpg)
+
+Selecting **Main floor** uses the floor marked **Default** in the editor's floor
+menu; it does not use the last-viewed floor remembered by the card. Links to the
+current floor or a deleted floor have no navigation icon. A missing specific
+destination stays visible in the editor as **Missing floor** so it can be repaired.
+Configured tap actions still replace floor navigation, while hold and double-tap
+actions can be used alongside it.
 
 **At the end of the list it leads nowhere, and stops being a button.** An `up` staircase
 on the top floor still draws as a staircase; without another runnable action, it has

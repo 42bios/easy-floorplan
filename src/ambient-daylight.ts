@@ -4,7 +4,9 @@ import { OPENING_ON_WALL_EPS } from "./dead-space";
 import { liveSunAttribute, openingGlassIsClear } from "./render";
 
 /**
- * Room-aware diffuse daylight geometry.
+ * Diffuse daylight geometry and the Area-only source-classification fallback.
+ * Plans with closed wall outlines use ambient-daylight-walls.ts to supply
+ * physical rooms and wall visibility instead of named Area boundaries.
  *
  * The module is deliberately pure: it reads no Home Assistant state and emits
  * no SVG, so every decision below is testable on plain numbers. The card wires
@@ -62,6 +64,8 @@ export interface AmbientDaylightPatch {
   gradientStart: AreaPoint;
   gradientEnd: AreaPoint;
   opacity: number;
+  /** Wall visibility, applied after the soft edge is blurred. */
+  clipPoints?: AreaPoint[];
 }
 
 interface BoundaryMatch {
@@ -330,6 +334,26 @@ export function ambientDaylightPatches(
   return out;
 }
 
+/** Inner share of a fan's half-width that stays at full light before the side fade. */
+export const AMBIENT_DAYLIGHT_SIDE_SHOULDER = 0.5;
+
+/**
+ * Share of a fan's light left at a fraction of its half-width from the axis:
+ * full across the inner half, then a smoothstep down to nothing at the fan's
+ * side edge. The point model below and the drawn patch
+ * (ambient-daylight-render.ts) both read it, so the picture and the numbers
+ * fade towards the sides the same way. A flat fan ends in a hard side edge,
+ * and where two openings' fans overlap behind a short pier those edges draw a
+ * bright ray that seems to come out of the pier. The full-light shoulder keeps
+ * a single window's room about as bright as the flat fan left it; a smoothstep
+ * across the whole width would take half its light away.
+ */
+export function ambientLateralFalloff(lateralT: number): number {
+  const shoulder = AMBIENT_DAYLIGHT_SIDE_SHOULDER;
+  const t = Math.max(0, Math.min(1, (Math.abs(lateralT) - shoulder) / (1 - shoulder)));
+  return 1 - t * t * (3 - 2 * t);
+}
+
 /**
  * Normalized ambient daylight at one point in one room.
  *
@@ -366,11 +390,10 @@ export function ambientDaylightAtPoint(
 
     // Smooth, deliberately broad falloff. Squaring the depth term keeps the
     // window side visibly brighter without turning the far wall into a hard
-    // cutoff; the lateral smoothstep avoids a triangular spotlight edge.
+    // cutoff; the lateral fade avoids a triangular spotlight edge.
     const depthT = axial / maxDepth;
     const depthFactor = (1 - depthT) ** 2;
-    const lateralT = lateral / halfWidth;
-    const lateralFactor = 1 - lateralT * lateralT * (3 - 2 * lateralT);
+    const lateralFactor = ambientLateralFalloff(lateral / halfWidth);
     const t = clamp01(transmission(source.openingId), 0);
     const contribution = Math.max(0, Math.min(1, strength * day * t * depthFactor * lateralFactor));
     darkness *= 1 - contribution;

@@ -1,5 +1,7 @@
 import { nothing } from "lit";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import * as geometry from "./dead-space";
+import * as lighting from "./render";
 import type { Floor, FloorplanCardConfig, HomeAssistant, RenderHass } from "./types";
 import { ambientDaylightEnabled, renderAmbientDaylightLayer } from "./ambient-daylight-integration";
 import { collectWatchedEntities } from "./render";
@@ -65,6 +67,29 @@ function hassWithElevation(elevation: unknown): HomeAssistant {
 }
 
 describe("ambient daylight host integration", () => {
+  it("reuses generated-wall topology and visibility across HA brightness updates", () => {
+    const f = floor();
+    f.areas[0]!.sideWalls = { top: "wall", right: "wall", bottom: "wall", left: "wall" };
+    const trace = vi.spyOn(geometry, "traceFaces");
+    const sweep = vi.spyOn(lighting, "glowReach");
+    try {
+      const c = config({ ambientDaylight: true });
+      const noon = renderAmbientDaylightLayer(f, c, hassWithElevation(30), "cached", openingState);
+      const dawn = renderAmbientDaylightLayer({ ...f }, c, hassWithElevation(0), "cached", openingState);
+      expect(noon).not.toBe(nothing);
+      expect(dawn).not.toBe(nothing);
+      expect(serialize(noon)).not.toBe(serialize(dawn));
+      expect(trace).toHaveBeenCalledTimes(1);
+      expect(sweep).toHaveBeenCalledTimes(1);
+      f.areas = [{ ...f.areas[0]!, sideWalls: { top: "wall" } }];
+      renderAmbientDaylightLayer(f, c, hassWithElevation(30), "cached", openingState);
+      expect(trace).toHaveBeenCalledTimes(2);
+    } finally {
+      trace.mockRestore();
+      sweep.mockRestore();
+    }
+  });
+
   it("is a strict opt-in and registers its sun input in the central watcher set", () => {
     expect(ambientDaylightEnabled(config())).toBe(false);
     expect(ambientDaylightEnabled(config({ ambientDaylight: false }))).toBe(false);
