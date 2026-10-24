@@ -36,6 +36,11 @@ export interface HomeAssistant extends BaseHomeAssistant {
    * `attributes`.
    */
   entities?: Record<string, { icon?: string } | undefined>;
+  /**
+   * HA has carried `darkMode` on `themes` since 2021; `custom-card-helpers`
+   * predates it. Read by `roomTints` to pick each tint's dark side.
+   */
+  themes: BaseHomeAssistant["themes"] & { darkMode?: boolean };
 }
 
 /**
@@ -51,6 +56,8 @@ export interface RenderHass {
   states: Record<string, HassEntity | undefined>;
   formatEntityState(stateObj: HassEntity): string;
   formatEntityAttributeValue?(stateObj: HassEntity, attribute: string): string;
+  /** Read only for dark mode, which picks the side of every room tint. */
+  themes?: { darkMode?: boolean };
 }
 
 /** A straight wall segment in virtual coordinate space. */
@@ -1096,6 +1103,7 @@ export type FurnitureType =
   | "chair"
   | "sofa"
   | "bed"
+  | "bunkBed"
   | "wardrobe"
   | "dresser"
   | "tallDresser"
@@ -1188,6 +1196,19 @@ export interface Furniture {
   tap_action?: ActionConfig;
   hold_action?: ActionConfig;
   double_tap_action?: ActionConfig;
+  /**
+   * Draw the round action icon at the piece's centre (default true).
+   *
+   * The icon is what makes a piece's gestures discoverable, and since #323 it
+   * is the only thing that takes them: the drawing passes taps through to the
+   * room underneath. On a plan where many pieces carry an action — a sensor
+   * on every plant, more-info on every cabinet — that is a circle on every
+   * one of them (issue #362). `false` drops the circle and gives the gestures
+   * back to the drawing itself, the way furniture answered before the icon:
+   * tapping the piece runs its action, and only the space around it reaches
+   * the room.
+   */
+  showIcon?: boolean;
   /**
    * Optional entity that makes the drawing live (issue #82) — a soil sensor on
    * a plant, a water temperature sensor on a fish tank, a contact sensor on a
@@ -1313,6 +1334,37 @@ export type RectAreaSideWallState = "none" | "wall" | "divider";
 export type RectAreaSideWalls = Partial<Record<RectAreaSide, RectAreaSideWallState>>;
 
 /**
+ * Architectural style of a roof structure.
+ */
+export type RoofType = "flat" | "gable" | "hip" | "shed";
+
+/**
+ * A 3D roof structure defined on a floor.
+ */
+export interface Roof {
+  id: string;
+  type: RoofType;
+  /** Vertices in drawing order, virtual canvas units. Implicitly closed. */
+  points: AreaPoint[];
+  /** Ridge height above eaves in canvas units (like wallHeight). */
+  height: number;
+  /** Optional overhang distance past perimeter. Default 0. */
+  overhang?: number;
+  /** Optional surface color. */
+  color?: string;
+  /** Which side is pitched high for a shed (mono-pitch) roof. Reuses RectAreaSide. */
+  highSide?: RectAreaSide;
+  /** Optional ridge orientation override (horizontal vs vertical) for square or custom footprints. */
+  ridge?: "horizontal" | "vertical";
+  /** Optional custom elevation Z offset (for posts/custom placement). Defaults to floor wall top. */
+  elevation?: number;
+  /** Locked state in editor. */
+  locked?: boolean;
+}
+
+export type OutdoorZoneKind = "indoor" | "lawn" | "patio" | "pool" | "terrace" | "driveway" | "garden" | "courtyard";
+
+/**
  * A named room polygon, drawn point-by-point in the editor and closed by
  * clicking back on the starting vertex. Distinct from a {@link Floor} (a
  * whole level/story) the same way Home Assistant's own "area" (room) sits
@@ -1324,6 +1376,8 @@ export interface Area {
   points: AreaPoint[];
   /** Display name. Mirrors the linked HA area's name when `haArea` is set. */
   name?: string;
+  /** Categorizes the area type (e.g. indoor room vs outdoor lawn, patio, pool, driveway). */
+  zoneKind?: OutdoorZoneKind;
   /** Show the name label on the plan, centered on the polygon. Default true. */
   showName?: boolean;
   /**
@@ -1616,6 +1670,15 @@ export const DEFAULT_ITEM_SIZE = 34;
  * would otherwise shrink its touch targets with it.
  */
 export const MIN_TOUCH_TARGET = 34;
+/**
+ * The round action icon on a piece of furniture (issues #323, #362): its
+ * diameter and its glyph. Overlay measures like a device badge's `size` —
+ * screen pixels under `overlayScale: fixed`, canvas units under `plan` — so
+ * on a plan that shrinks its badges with the card these shrink with them.
+ * Same diameter as a default badge, which is a finger at `fixed`.
+ */
+export const FURNITURE_ICON_SIZE = DEFAULT_ITEM_SIZE;
+export const FURNITURE_ICON_GLYPH = 20;
 export const DEFAULT_TEXT_SIZE = 16;
 export const DEFAULT_RIPPLE_SIZE = 80;
 export const DEFAULT_RIPPLE_DIRECTION = 0;
@@ -1638,6 +1701,13 @@ export const FURNITURE_COLOR = "var(--fp-skin-furniture, #9e9e9e)";
 export interface Floor {
   id: string;
   name: string;
+  /** Whether this floor represents an outdoor courtyard area. */
+  isOutdoor?: boolean;
+  /**
+   * Explicit level number for 3D stacking (0 for ground floor, 1 for 1st floor, -1 for basement).
+   * When omitted, defaults to Home Assistant's floor level or its relative order in the floor list.
+   */
+  level?: number;
   /**
    * Optional link to a Home Assistant floor (its registry `floor_id`).
    * Selecting one in the editor names this floor after it; the id is kept so
@@ -1680,6 +1750,18 @@ export interface Floor {
   imageFit?: "stretch" | "contain" | "cover";
   /** Background image opacity, 0–1. Default 1. */
   imageOpacity?: number;
+  /**
+   * The background image to show instead while Home Assistant is in dark mode
+   * (issue #366) — a plan someone has inverted or recoloured themselves. Takes
+   * precedence over {@link imageInvertDark}.
+   */
+  imageDark?: string;
+  /**
+   * Invert the background image while Home Assistant is in dark mode (issue
+   * #366), so a black-on-white scan becomes white-on-black. Hues are turned
+   * back round, so coloured marks keep roughly their colour.
+   */
+  imageInvertDark?: boolean;
   walls: Wall[];
   openings: Opening[];
   items: FloorItem[];
@@ -1687,7 +1769,51 @@ export interface Floor {
   furniture: Furniture[];
   trackers: Tracker[];
   areas: Area[];
+  roofs?: Roof[];
+  /** Summary metrics configuration for this floor (issue #234). */
+  summary?: FloorSummaryConfig;
 }
+
+/** Card-level floor summary configuration (issue #234). */
+export interface FloorSummaryCardConfig {
+  /** Master toggle to show summaries (default: false). */
+  enabled?: boolean;
+  /** Metrics to display in the floor buttons (default: all five). */
+  metrics?: Array<"temperature" | "humidity" | "presence" | "lights" | "windows">;
+  /** Number of decimal places for temperature (default: 1). */
+  decimals?: number;
+}
+
+/** Per-floor summary configuration (issue #234). */
+export interface FloorSummaryConfig {
+  /** Enable/disable summary for this specific floor (inherits card default if unset). */
+  enabled?: boolean;
+  /** Explicit entity override for temperature (bypasses auto-calculation). */
+  temperatureEntity?: string;
+  /** Explicit entity override for humidity (bypasses auto-calculation). */
+  humidityEntity?: string;
+  /** Explicit entity override for presence/occupancy. */
+  presenceEntity?: string;
+  /**
+   * Entity IDs on this floor to exclude from auto-aggregation
+   * (e.g. garage temperature, outdoor patio sensor).
+   */
+  excludeEntities?: string[];
+  /** Optional custom badge/subtitle string template (e.g. "21.5° | Eco"). */
+  customText?: string;
+}
+
+/** Default floor summary decimal precision */
+export const DEFAULT_FLOOR_SUMMARY_DECIMALS = 1;
+
+/** Default metrics displayed in floor switcher summary */
+export const DEFAULT_FLOOR_SUMMARY_METRICS: Array<"temperature" | "humidity" | "presence" | "lights" | "windows"> = [
+  "temperature",
+  "humidity",
+  "presence",
+  "lights",
+  "windows",
+];
 
 /** Sizing mode for the HTML overlay layer. See {@link FloorplanCardConfig.overlayScale}. */
 export type OverlayScale = "fixed" | "plan";
@@ -1841,6 +1967,15 @@ export interface FloorplanCardConfig extends LovelaceCardConfig {
    * an entry moves every element that names it. See `src/palette.ts`.
    */
   palette?: PaletteColor[];
+  /**
+   * `auto` gives every room without a `color` of its own a soft tint from a
+   * small built-in palette, picked so rooms that share a wall never share a
+   * tint and the same room keeps its tint from load to load. Off when unset,
+   * which renders every uncoloured room in the accent as it always has. Never
+   * touches a room's own colour or its live `stateColor`/`activeColor`. See
+   * `src/room-tints.ts`.
+   */
+  roomTints?: "auto" | "off";
   /**
    * How the HTML overlay (badges, labels, room names, text) is sized.
    *
@@ -2159,6 +2294,9 @@ export interface FloorplanCardConfig extends LovelaceCardConfig {
   furniture?: Furniture[];
   trackers?: Tracker[];
   areas?: Area[];
+  roofs?: Roof[];
+  /** Floor summary configuration (issue #234). */
+  floorSummary?: FloorSummaryCardConfig;
   /**
    * Symbols this plan defines for itself (issue #90), keyed by id and merged
    * over the shipped `furniture/` library — so you can draw a piece nobody has
@@ -2239,6 +2377,7 @@ export function haFloorsOf(hass: unknown): HaFloorInfo[] {
 export interface HaAreaInfo {
   area_id: string;
   name: string;
+  floor_id?: string | null;
 }
 
 /**
@@ -2408,6 +2547,7 @@ export function makeFloor(name: string, walls: Wall[] = []): Floor {
     furniture: [],
     trackers: [],
     areas: [],
+    roofs: [],
   };
 }
 
@@ -2427,7 +2567,37 @@ function normalizeFloor(f: Floor): Floor {
     furniture: f.furniture ?? [],
     trackers: f.trackers ?? [],
     areas: f.areas ?? [],
+    roofs: f.roofs ?? [],
   };
+}
+
+/**
+ * Extract all roofs for a floor.
+ */
+export function getFloorRoofs(f: Floor): Roof[] {
+  return f.roofs ?? [];
+}
+
+/**
+ * Determine the vertical storey level (Z index) for a floor.
+ * Prioritizes an explicit `level` on the floor, falls back to Home Assistant registry level,
+ * and finally defaults to 0-based index among indoor floors.
+ */
+export function resolveFloorLevel(f: Floor, allFloors: readonly Floor[], hass?: unknown): number {
+  if (typeof f.level === "number" && !isNaN(f.level)) {
+    return f.level;
+  }
+  if (f.haFloor !== undefined && f.haFloor !== "") {
+    const haFloors = haFloorsOf(hass);
+    const haMatch = haFloors.find((h) => h.floor_id === f.haFloor);
+    if (haMatch?.level != null) {
+      return haMatch.level;
+    }
+  }
+  const indoorFloors = allFloors.filter((fl) => !fl.isOutdoor);
+  const idx = indoorFloors.findIndex((fl) => fl.id === f.id);
+  if (idx !== -1) return idx;
+  return 0;
 }
 
 /**
@@ -2487,6 +2657,7 @@ export function getFloors(c: FloorplanCardConfig): Floor[] {
       furniture: c.furniture ?? [],
       trackers: c.trackers ?? [],
       areas: c.areas ?? [],
+      roofs: c.roofs ?? [],
     },
   ];
 }

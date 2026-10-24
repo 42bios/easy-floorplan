@@ -4,7 +4,7 @@ import {
   polygonCentroid, 
   textLabel, 
   skylightWidth,
-  wallThickness
+  wallThickness,
 } from "./render";
 import { 
   AreaPoint, 
@@ -23,7 +23,7 @@ import {
 export const RECT_AREA_EPSILON = 0.001;
 
 /** Element kinds addressable by the editor's selection model. */
-export type SelKind = "wall" | "opening" | "item" | "text" | "furniture" | "tracker" | "area";
+export type SelKind = "wall" | "opening" | "item" | "text" | "furniture" | "tracker" | "area" | "roof";
 
 export interface Sel {
   kind: SelKind;
@@ -616,6 +616,10 @@ export function elementsInRect(f: Floor, m: Rect): Sel[] {
     const c = polygonCentroid(a.points);
     if (inside(c.x, c.y)) out.push({ kind: "area", id: a.id });
   }
+  for (const r of f.roofs ?? []) {
+    const c = polygonCentroid(r.points);
+    if (inside(c.x, c.y)) out.push({ kind: "roof", id: r.id });
+  }
   return out;
 }
 
@@ -654,6 +658,12 @@ export function applyDelta(f: Floor, dx: number, dy: number, orig: Map<string, O
         ? { ...el, points: o.points.map((p) => ({ x: p.x + dx, y: p.y + dy })) }
         : el;
     }),
+    roofs: (f.roofs ?? []).map((el) => {
+      const o = orig.get(`roof:${el.id}`);
+      return o && o.kind === "polygon"
+        ? { ...el, points: o.points.map((p) => ({ x: p.x + dx, y: p.y + dy })) }
+        : el;
+    }),
   };
 }
 
@@ -672,10 +682,12 @@ const PICK_ORDER: SelKind[] = [
   "furniture",
   "wall",
   "tracker",
-  // Room polygons are the largest thing on the plan and usually cover
-  // everything else in the room, so they pick last — but they *are* in the
-  // list, so cycling can still reach them.
+  // Room polygons cover devices and walls, so they pick after specific elements.
   "area",
+  // Roof polygons are building-level envelopes that cover multiple rooms or the
+  // whole floor, so they pick after areas on first click — but cycling can still
+  // reach them.
+  "roof",
 ];
 
 /** Hit tolerances in virtual units. Wall matches the editor's fat hit stroke. */
@@ -769,6 +781,9 @@ export function elementsAtPoint(
     const p = toLocal(x, y, tr.x + tr.w / 2, tr.y + tr.h / 2, tr.angle ?? 0);
     if (Math.abs(p.x) <= tr.w / 2 && Math.abs(p.y) <= tr.h / 2) push("tracker", tr.id, i, tr.locked);
   });
+  (f.roofs ?? []).forEach((r, i) => {
+    if (pointInPolygon(r.points, x, y)) push("roof", r.id, i, r.locked);
+  });
   (f.areas ?? []).forEach((a, i) => {
     if (pointInPolygon(a.points, x, y)) push("area", a.id, i, a.locked);
   });
@@ -809,6 +824,8 @@ export function findElement(f: Floor, sel: Sel): { id: string; locked?: boolean 
       return (f.trackers ?? []).find((x) => x.id === sel.id);
     case "area":
       return (f.areas ?? []).find((x) => x.id === sel.id);
+    case "roof":
+      return (f.roofs ?? []).find((x) => x.id === sel.id);
   }
 }
 
@@ -860,3 +877,40 @@ export function cyclePick(
   const i = candidates.findIndex((c) => c.kind === current[0]!.kind && c.id === current[0]!.id);
   return i < 0 ? candidates[0]! : candidates[(i + 1) % candidates.length]!;
 }
+
+export function isSameWallSegment(w1: Wall, w2: Wall, eps = 1): boolean {
+  return (
+    (Math.hypot(w1.x1 - w2.x1, w1.y1 - w2.y1) <= eps && Math.hypot(w1.x2 - w2.x2, w1.y2 - w2.y2) <= eps) ||
+    (Math.hypot(w1.x1 - w2.x2, w1.y1 - w2.y2) <= eps && Math.hypot(w1.x2 - w2.x1, w1.y2 - w2.y1) <= eps)
+  );
+}
+
+/**
+ * Test whether a lower-floor area is covered by upper-floor areas/rooms.
+ */
+export function isAreaCoveredByUpper(
+  area: Area,
+  upperPolygons: readonly (readonly AreaPoint[])[]
+): boolean {
+  if (!area.points || area.points.length < 3) return true;
+  if (!upperPolygons.length) return false;
+  const centroid = polygonCentroid(area.points);
+  if (centroid && upperPolygons.some((poly) => pointInPolygon(poly, centroid.x, centroid.y))) {
+    return true;
+  }
+  if (centroid) {
+    const interiorPoints = area.points.map((p) => ({
+      x: (p.x + centroid.x) / 2,
+      y: (p.y + centroid.y) / 2,
+    }));
+    if (
+      interiorPoints.length > 0 &&
+      interiorPoints.every((ip) => upperPolygons.some((poly) => pointInPolygon(poly, ip.x, ip.y)))
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+

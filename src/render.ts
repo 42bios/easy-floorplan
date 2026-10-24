@@ -35,6 +35,7 @@ import type {
   FloorText,
   OverlayScale,
   ActionConfig,
+  OutdoorZoneKind,
   StripSide,
 } from "./types";
 import {
@@ -131,6 +132,9 @@ export function hassRenderInputsChanged(
   // Both formatters, because a plan can be built entirely out of attribute
   // readings and would otherwise be watching a function it never calls.
   if (prev.formatEntityAttributeValue !== next.formatEntityAttributeValue) return true;
+  // Dark mode picks the light or dark side of every room tint, and HA flips it
+  // on a live card (an auto theme at sunset) without any entity changing.
+  if (prev.themes?.darkMode !== next.themes?.darkMode) return true;
   for (const id of watchedEntities) {
     if (prev.states[id] !== next.states[id]) return true;
   }
@@ -232,6 +236,9 @@ export function collectWatchedEntities(c: FloorplanCardConfig): Set<string> {
         if (s?.presence?.entity) ids.add(s.presence.entity);
       }
     }
+    if (f.summary?.temperatureEntity) ids.add(f.summary.temperatureEntity);
+    if (f.summary?.humidityEntity) ids.add(f.summary.humidityEntity);
+    if (f.summary?.presenceEntity) ids.add(f.summary.presenceEntity);
   }
   return ids;
 }
@@ -2758,6 +2765,34 @@ const DOMAIN_BADGE_READING: Record<string, { attribute: string; unit: string }> 
   humidifier: { attribute: "current_humidity", unit: "%" },
 };
 
+/**
+ * Attributes the badge cannot print as the number on the wire, keyed by the
+ * domain of the entity being read. A light's `brightness` is 0-255, and HA's
+ * own attribute formatter, the one a label reads through, words it as
+ * `Math.round((value / 255) * 100)` with a `%`. The badge deliberately skips
+ * that formatter ({@link badgeValue}: display precision and full units do not
+ * fit in a circle), so it has to apply the conversion itself: the same reading
+ * must not read "50%" in a label and "128" in a badge (issue #359).
+ *
+ * Entries are conversions HA itself defines for that domain's attribute,
+ * nothing invented here, but the table covers only what has been added so
+ * far, not every conversion HA defines. A `brightness` reading off any other
+ * domain stays raw.
+ */
+const DOMAIN_ATTRIBUTE_BADGE_TEXT: Record<string, Record<string, (n: number) => string>> = {
+  light: {
+    brightness: (n) => `${Math.round((n / 255) * 100)}%`,
+  },
+};
+
+/**
+ * One attribute's badge text under its own domain's conversion, or undefined
+ * when the attribute has none and the number is printed as it stands.
+ */
+function attributeBadgeText(entity: string, attribute: string, n: number): string | undefined {
+  return DOMAIN_ATTRIBUTE_BADGE_TEXT[entity.split(".")[0]]?.[attribute]?.(n);
+}
+
 /** A finite number from a state/attribute value, or undefined. Booleans and blanks are not readings. */
 function numericReading(raw: unknown): number | undefined {
   if (raw == null || typeof raw === "boolean") return undefined;
@@ -2898,14 +2933,20 @@ export function badgeReading(
   const primary = (): string | undefined => {
     const st = hass.states[item.entity as string];
     const attrs = st?.attributes as Record<string, unknown> | undefined;
-    const reading = DOMAIN_BADGE_READING[(item.entity as string).split(".")[0]];
+    const entity = item.entity as string;
+    const reading = DOMAIN_BADGE_READING[entity.split(".")[0]];
     if (item.attribute) {
       const n = numericReading(attrs?.[item.attribute]);
       // A unit only when we know it belongs to *this* attribute:
       // `unit_of_measurement` describes the state, not an arbitrary attribute,
       // so borrowing it here would label a battery percentage "°C".
-      if (n !== undefined)
+      if (n !== undefined) {
+        // A domain-worded attribute (a light's brightness) brings its own
+        // text, unit included; only the rest borrow a unit from the table.
+        const worded = attributeBadgeText(entity, item.attribute, n);
+        if (worded !== undefined) return worded;
         return compactNumber(n) + (item.attribute === reading?.attribute ? reading.unit : "");
+      }
     }
     if (reading) {
       const n = numericReading(attrs?.[reading.attribute]);
@@ -2925,7 +2966,10 @@ export function badgeReading(
     const attrs = st?.attributes as Record<string, unknown> | undefined;
     if (r.attribute) {
       const n = numericReading(attrs?.[r.attribute]);
-      return n === undefined ? undefined : compactNumber(n);
+      if (n === undefined) return undefined;
+      // Same domain wording as the configured attribute above, so a brightness
+      // reading in the pool (the issue's config) reads percent too.
+      return attributeBadgeText(entity, r.attribute, n) ?? compactNumber(n);
     }
     const n = numericReading(st?.state);
     return n === undefined ? undefined : formatReading(n, attrs?.unit_of_measurement);
@@ -4618,7 +4662,16 @@ export function renderOpening(o: Opening, style: OpeningStyle): SVGTemplateResul
             shutterTone2,
             shutterAmt2
           )
-        : rollCurtain(o.length, shutterTone, shutterAmt)
+        : svg`${
+            // Up or moving, the track wears the shutter's accent (issue #375),
+            // as a roll-up door's does (#154): fully raised the curtain has
+            // scaled away, and without this line the colour only ever showed
+            // part-way down. Shut, the band covers the line, so none is drawn.
+            style.shutter.active
+              ? svg`<line x1=${-half} y1="0" x2=${half} y2="0"
+                    stroke=${shutterTone} stroke-width="0.75" />`
+              : nothing
+          }${rollCurtain(o.length, shutterTone, shutterAmt)}`
     }`;
   }
   const { sx, sy } = openingMirror(o);
@@ -6322,6 +6375,69 @@ export function renderSunlight(
 }
 
 /**
+ * Whether Home Assistant is showing its dark theme. `themes.darkMode` is the
+ * resolved answer — "auto" already settled against the device — but it is
+ * newer than the helper library's types, hence the cast.
+ */
+export function hassDarkMode(hass: unknown): boolean {
+  return !!(hass as { themes?: { darkMode?: boolean } } | undefined)?.themes?.darkMode;
+}
+
+/**
+ * Which background image a floor shows, and how, in light or dark mode
+ * (issue #366). A dark image of its own wins; otherwise the light one, inverted
+ * if asked. A floor with only a dark image shows nothing in light mode.
+ */
+export function floorImage(
+  floor: Pick<Floor, "image" | "imageDark" | "imageInvertDark">,
+  dark: boolean
+): { href: string; filter?: string } | undefined {
+  if (dark && floor.imageDark) return { href: floor.imageDark };
+  if (!floor.image) return undefined;
+  // invert() alone would turn a red radiator cyan; turning the hue back round
+  // keeps colours roughly what they were while light and dark swap.
+  if (dark && floor.imageInvertDark) return { href: floor.image, filter: "invert(1) hue-rotate(180deg)" };
+  return { href: floor.image };
+}
+
+/**
+ * Render direct sunlight & building wall shadows cast on outdoor floors (isOutdoor: true).
+ */
+export function renderOutdoorSunlight(
+  walls: readonly Wall[],
+  width: number,
+  height: number,
+  id: string,
+  opts: SunlightOptions,
+): SVGTemplateResult | typeof nothing {
+  const { dir, strength = 1 } = opts;
+  const direct =
+    typeof opts.direct === "number" && Number.isFinite(opts.direct)
+      ? Math.max(0, Math.min(1, opts.direct))
+      : 1;
+  if (strength <= 0) return nothing;
+
+  const reach = Math.min(width, height) * sunReachFraction(opts.reach);
+  const shadeColor = opts.shade === undefined ? SUN_SHADE_COLOR : opts.shade;
+  if (shadeColor === null) return nothing;
+
+  const shadowPolys = walls.map((w) => ({
+    poly: polyPoints(sunShadowPolygon(w, dir, reach)),
+    thickness: wallThickness(w.thickness),
+  }));
+  if (shadowPolys.length === 0) return nothing;
+
+  const opacity = SUN_SHADE * strength * direct;
+
+  return svg`
+    <g class="fp-sunlight fp-outdoor-sunlight" id=${id}>
+      ${shadowPolys.map((s) =>
+        svg`<polygon class="fp-outdoor-shadow" points=${s.poly} fill=${cssColorOr(shadeColor, SUN_SHADE_COLOR)} opacity=${opacity} stroke=${cssColorOr(shadeColor, SUN_SHADE_COLOR)} stroke-width=${s.thickness} />`
+      )}
+    </g>`;
+}
+
+/**
  * `preserveAspectRatio` for a floor's background image (issue #86).
  *
  * SVG already knows how to do this, so the fit option is a straight mapping
@@ -6657,13 +6773,43 @@ export function renderDeadSpace(
                       fill-opacity=${DEAD_SPACE_HATCH_OPACITY} stroke="none" />`;
 }
 
+export function outdoorZoneDefaultColor(kind?: OutdoorZoneKind): string | undefined {
+  switch (kind) {
+    case "lawn":
+      return "#4CAF50";
+    case "patio":
+      return "#9E9E9E";
+    case "pool":
+      return "#2196F3";
+    case "terrace":
+      return "#A1887F";
+    case "driveway":
+      return "#607D8B";
+    case "garden":
+      return "#8BC34A";
+    case "courtyard":
+      return "#D7CCC8";
+    default:
+      return undefined;
+  }
+}
+
 /**
  * A room's translucent fill polygon, with no stroke of its own — the outline
  * is a separate pass, drawn above the walls by {@link renderAreaBorder}.
  * `color`/`opacity` are config-supplied style values, so they go through the
  * same injection allowlist as every other color/number field (see css-safe.ts).
+ *
+ * `rest` is the automatic room tint (`roomTints: auto`, see room-tints.ts):
+ * what an uncoloured room rests at instead of the accent. It never applies to a
+ * room with its own `color` — the caller passes none for one — and a live fill
+ * still wins over it, so state colouring and `highlight` behave as before.
  */
-export function renderArea(a: Area, liveColor?: string): SVGTemplateResult {
+export function renderArea(
+  a: Area,
+  liveColor?: string,
+  rest?: { color: string; opacity: number }
+): SVGTemplateResult {
   const pts = a.points.map((p) => `${p.x},${p.y}`).join(" ");
   // `liveColor` has already been through the allowlist by areaColor(). When it
   // is present the area is "live" and `highlight` decides whether that color
@@ -6671,7 +6817,14 @@ export function renderArea(a: Area, liveColor?: string): SVGTemplateResult {
   const liveFill = liveColor !== undefined && (a.highlight ?? "fill") !== "border";
 
   // activeOpacity is a fill concern, so it only applies when the fill is live.
-  const opacity = liveFill ? a.activeOpacity ?? a.opacity : a.opacity;
+  // A room's own colour always beats a tint, whatever the caller passed, and
+  // so does an outdoor zone's default colour: a lawn stays lawn green.
+  const zoneColor = outdoorZoneDefaultColor(a.zoneKind);
+  const tint = a.color || zoneColor ? undefined : rest;
+  const opacity = liveFill ? a.activeOpacity ?? a.opacity : tint ? tint.opacity : a.opacity;
+  // A tint is a library constant built by roomTintFill, not config, so it
+  // needs no allowlist pass; the room's own colour still goes through one.
+  const restFill = tint ? tint.color : cssColorOr(a.color, zoneColor ?? SKIN_ACCENT);
 
   // Stroke stays pinned off rather than omitted: this element is reused across
   // live/rest updates, and stating it keeps the fill pass unable to draw an
@@ -6679,7 +6832,7 @@ export function renderArea(a: Area, liveColor?: string): SVGTemplateResult {
   return svg`<polygon class="fp-area" data-id=${cssIdent(a.id) ?? nothing}
                        data-entity=${cssEntityId(a.entity) ?? nothing}
                        points=${pts}
-                       fill=${liveFill ? liveColor : cssColorOr(a.color, SKIN_ACCENT)}
+                       fill=${liveFill ? liveColor : restFill}
                        fill-opacity=${cssNumber(opacity, DEFAULT_AREA_OPACITY)}
                        stroke="none"
                        stroke-width="0" />`;

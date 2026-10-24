@@ -20,6 +20,7 @@ import {
   projectDisplayForm,
   projectPressForm,
   projectSkinForm,
+  projectRoomTintsForm,
   projectSunForm,
   projectReliefForm,
   projectDeadSpaceForm,
@@ -27,10 +28,12 @@ import {
   areaForm,
   areaNameForm,
   itemGroup7aForm,
+  roofForm,
+  defaultRoofHeight,
 } from "./editor-forms";
 import { itemHasLabel } from "./render";
 import type { FormField } from "./editor-forms";
-import type { Area, FloorText, Opening, FloorItem, Floor, Furniture, Tracker, FloorplanCardConfig } from "./types";
+import type { Area, FloorText, Opening, FloorItem, Floor, Furniture, Tracker, FloorplanCardConfig, Roof } from "./types";
 import {
   DEFAULT_GLOW_RADIUS,
   DEFAULT_STRIP_LENGTH,
@@ -1167,6 +1170,43 @@ describe("textForm / furnitureForm / trackerForm", () => {
     expect(out.tap_action).toEqual({ action: "toggle" });
   });
 
+  // Issue #362: the round action icon can be hidden.
+  it("furniture offers the action icon toggle only once there is an action to show", () => {
+    const names = (extra: Record<string, unknown>) =>
+      furnitureForm({ id: "f", type: "table", x: 0, y: 0, w: 10, h: 10, ...extra } as never)
+        .fields.map((x) => x.name);
+    expect(names({})).not.toContain("showIcon");
+    expect(names({ goToFloor: "up" })).toContain("showIcon");
+    expect(names({ tap_action: { action: "more-info" } })).toContain("showIcon");
+    expect(names({ hold_action: { action: "toggle" } })).toContain("showIcon");
+    expect(names({ double_tap_action: { action: "toggle" } })).toContain("showIcon");
+  });
+
+  it("furniture writes the action icon down only when it is switched off", () => {
+    const piece = { id: "f", type: "table", x: 0, y: 0, w: 10, h: 10, tap_action: { action: "toggle" } };
+    const form = furnitureForm(piece as never);
+    expect(form.data.showIcon).toBe(true);
+    expect(furnitureForm({ ...piece, showIcon: false } as never).data.showIcon).toBe(false);
+    expect(form.toPatch({ showIcon: false } as never)).toEqual({ showIcon: false });
+    // On is the default, so turning it back on clears the key.
+    expect(form.toPatch({ showIcon: true } as never)).toEqual({ showIcon: undefined });
+  });
+
+  it("areaForm exposes zoneKind data and patches it", () => {
+    const form = areaForm({ id: "a", points: [], zoneKind: "lawn" } as never);
+    expect(form.data.zoneKind).toBe("lawn");
+    expect(form.toPatch({ zoneKind: "lawn" } as never)).toEqual({ zoneKind: "lawn" });
+    expect(form.toPatch({ zoneKind: "indoor" } as never)).toEqual({ zoneKind: undefined });
+  });
+
+  it("floorImageForm exposes isOutdoor data and patches it", () => {
+    const form = floorImageForm({ id: "f", name: "Courtyard", isOutdoor: true } as never);
+    expect(form.data.isOutdoor).toBe(true);
+    expect(form.toPatch({ isOutdoor: true } as never)).toEqual({ isOutdoor: true });
+    expect(form.toPatch({ isOutdoor: false } as never)).toEqual({ isOutdoor: undefined });
+  });
+
+
   it("non-sectional furniture has no chaise-side field or data", () => {
     const form = furnitureForm({ id: "f", type: "table", x: 0, y: 0, w: 10, h: 10 } as never);
     expect(form.fields.map((x) => x.name)).not.toContain("hand");
@@ -1432,6 +1472,18 @@ describe("wallForm / projectForm / floorImageForm", () => {
       pressEffect: "sparkle",
     } as never);
     expect(form.data.pressEffect).toBe(DEFAULT_PRESS_EFFECT);
+  });
+
+  it("room tints offers off and automatic, and keeps off out of the YAML", () => {
+    const base = { type: "t", width: 1000, height: 600 } as FloorplanCardConfig;
+    const form = projectRoomTintsForm(base);
+    expect(form.fields.map((x) => x.name)).toEqual(["roomTints"]);
+    const options = (form.fields[0].selector.select as { options: { value: string }[] }).options;
+    expect(options.map((o) => o.value)).toEqual(["off", "auto"]);
+    expect(form.data.roomTints).toBe("off");
+    expect(projectRoomTintsForm({ ...base, roomTints: "auto" }).data.roomTints).toBe("auto");
+    expect(form.toPatch({ roomTints: "auto" })).toEqual({ roomTints: "auto" });
+    expect(form.toPatch({ roomTints: "off" })).toEqual({ roomTints: undefined });
   });
 
   it("skin reads back a skin we don't ship as the default, matching what it renders as", () => {
@@ -2216,15 +2268,16 @@ describe("every field lands in exactly one panel group", () => {
   const FURNITURE_GROUPS = [
     ["type", "hand", "w", "h", "angle"],
     ["entity"],
-    ["goToFloor", "tap_action", "hold_action", "double_tap_action"],
+    ["goToFloor", "tap_action", "hold_action", "double_tap_action", "showIcon"],
   ];
   const TRACKER_GROUPS = [["w", "h", "x", "y", "angle"], ["dotSize"]];
   const AREA_GROUPS = [
-    ["showName", "labelSize"],
+    ["zoneKind", "showName", "labelSize"],
     ["entity"],
     ["highlight", "opacity", "activeOpacity"],
     ["fitZoom", "zoom", "tap_action", "hold_action", "double_tap_action"],
   ];
+  const ROOF_GROUPS = [["type", "highSide", "ridge", "height", "overhang", "elevation"]];
 
   const check = (fields: { name: string }[], groups: string[][], what: string) => {
     const grouped = groups.flat();
@@ -2295,7 +2348,7 @@ describe("every field lands in exactly one panel group", () => {
     expect(formSlice(projectDisplayForm(cfg), DEVICES).fields.map((f) => f.name)).toEqual(DEVICES);
   });
 
-  it("covers every furniture, tracker and area field", () => {
+  it("covers every furniture, tracker, area and roof field", () => {
     const f = { id: "f", type: "sofa", x: 0, y: 0, w: 40, h: 40 } as Furniture;
     check(furnitureForm(f).fields, FURNITURE_GROUPS, "furniture");
     check(
@@ -2303,11 +2356,21 @@ describe("every field lands in exactly one panel group", () => {
       FURNITURE_GROUPS,
       "furniture sectional"
     );
+    check(
+      furnitureForm({ ...f, tap_action: { action: "toggle" } } as Furniture).fields,
+      FURNITURE_GROUPS,
+      "furniture with an action"
+    );
     const tr = { id: "t", x: 0, y: 0, w: 10, h: 10 } as Tracker;
     check(trackerForm(tr).fields, TRACKER_GROUPS, "tracker");
     const a = { id: "a", points: [{ x: 0, y: 0 }] } as Area;
     check(areaForm(a).fields, AREA_GROUPS, "area");
     check(areaForm({ ...a, entity: "light.a", haArea: "kitchen" } as Area).fields, AREA_GROUPS, "area linked");
+    const r = { id: "r", type: "gable", points: [{ x: 0, y: 0 }] } as Roof;
+    check(roofForm(r).fields, ROOF_GROUPS, "roof gable");
+    check(roofForm({ ...r, type: "shed" } as Roof).fields, ROOF_GROUPS, "roof shed");
+    check(roofForm({ ...r, type: "flat" } as Roof).fields, ROOF_GROUPS, "roof flat");
+    check(roofForm({ ...r, type: "hip" } as Roof).fields, ROOF_GROUPS, "roof hip");
   });
 });
 
@@ -2801,3 +2864,54 @@ describe("growing badges with the room", () => {
     ).toEqual({ zoomedOverlayScale: undefined });
   });
 });
+
+describe("roofForm", () => {
+  const base: Roof = {
+    id: "r1",
+    type: "gable",
+    points: [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }],
+    height: 40,
+  };
+
+  it("shows highSide only for shed roofs", () => {
+    expect(roofForm({ ...base, type: "shed" }).fields.map((f) => f.name)).toContain("highSide");
+    expect(roofForm({ ...base, type: "gable" }).fields.map((f) => f.name)).not.toContain("highSide");
+    expect(roofForm({ ...base, type: "hip" }).fields.map((f) => f.name)).not.toContain("highSide");
+    expect(roofForm({ ...base, type: "flat" }).fields.map((f) => f.name)).not.toContain("highSide");
+  });
+
+  it("shows ridge orientation only for gable and hip roofs", () => {
+    expect(roofForm({ ...base, type: "gable" }).fields.map((f) => f.name)).toContain("ridge");
+    expect(roofForm({ ...base, type: "hip" }).fields.map((f) => f.name)).toContain("ridge");
+    expect(roofForm({ ...base, type: "shed" }).fields.map((f) => f.name)).not.toContain("ridge");
+    expect(roofForm({ ...base, type: "flat" }).fields.map((f) => f.name)).not.toContain("ridge");
+  });
+
+  it("shows ridge height only for pitched roofs, omitting it for flat slabs", () => {
+    expect(roofForm({ ...base, type: "gable" }).fields.map((f) => f.name)).toContain("height");
+    expect(roofForm({ ...base, type: "hip" }).fields.map((f) => f.name)).toContain("height");
+    expect(roofForm({ ...base, type: "shed" }).fields.map((f) => f.name)).toContain("height");
+    expect(roofForm({ ...base, type: "flat" }).fields.map((f) => f.name)).not.toContain("height");
+  });
+
+  it("does not expose elevation in form fields (rests on wall top by default)", () => {
+    expect(roofForm(base).fields.map((f) => f.name)).not.toContain("elevation");
+  });
+
+  it("cleans up irrelevant fields on type switch via toPatch without overwriting configured height", () => {
+    const spec = roofForm({ ...base, type: "shed", highSide: "top", height: 45 });
+    // Switching from shed to flat drops highSide and ridge, but preserves height
+    const patch = spec.toPatch({ type: "flat" });
+    expect(patch.type).toBe("flat");
+    expect(patch.highSide).toBeUndefined();
+    expect(patch.height).toBeUndefined();
+  });
+
+  it("calculates defaultRoofHeight correctly for each roof style", () => {
+    expect(defaultRoofHeight("flat", 60)).toBe(8);
+    expect(defaultRoofHeight("gable", 60)).toBe(36);
+    expect(defaultRoofHeight("hip", 100)).toBe(60);
+    expect(defaultRoofHeight("shed", 50)).toBe(30);
+  });
+});
+
