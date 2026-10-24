@@ -453,7 +453,8 @@ An **`awning`** or **`curtain`** bound to a `cover` entity is drawn at the cover
 (issue #196). Its `w × h` is the fully extended size: an awning at 100 % open, a curtain
 fully closed. As the cover moves, the moving side shrinks toward the edge that stays on
 the wall — an awning folds back to its top edge, a curtain gathers at one end. `hand`
-picks which end a curtain gathers at (`right` by default, `left`), and `hand: center`
+picks which end a curtain gathers at: the left by default (`hand: right`), the right with
+`hand: left`. `hand: center`
 makes it a pair that meets in the middle and gathers at both ends, still one piece with
 one entity. If the cover drops out, an awning draws retracted and a curtain draws closed.
 In 3D the awning hangs under the eaves rather than standing on the floor. Unbound, either
