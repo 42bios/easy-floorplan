@@ -44,11 +44,8 @@ async function mountEditor() {
   return {
     ed, host, root, svg, emitted, pointer, button,
     async loadTrace() {
-      await button(".panel .section-toggle");
-      const group = [...root.querySelectorAll<HTMLButtonElement>(".cfg-group-title")]
-        .find((b) => b.textContent?.includes("Trace template"))!;
-      group.click();
-      await ed.updateComplete;
+      await button('button.project-settings');
+      await button('button[data-page="plan"]');
       const input = root.querySelector<HTMLInputElement>("input.trace-file")!;
       const transfer = new DataTransfer();
       transfer.items.add(new File([
@@ -61,6 +58,8 @@ async function mountEditor() {
       expect(emitted).toHaveLength(0);
     },
     async traceMode(mode: "move" | "calibrate") {
+      await button("button.project-settings");
+      await button('button[data-page="plan"]');
       await button(mode === "move"
         ? 'button[title="Drag the template on the canvas"]'
         : 'button[title^="Click both ends"]');
@@ -69,10 +68,10 @@ async function mountEditor() {
     translation() {
       return root.querySelector<SVGGElement>("g.trace")!.transform.baseVal.getItem(0).matrix.e;
     },
-    async drawWall() {
-      pointer(svg, "pointerdown", 21, 100, 200);
-      pointer(svg, "pointermove", 21, 300, 200);
-      pointer(svg, "pointerup", 21, 300, 200);
+    async drawWall(y = 200) {
+      pointer(svg, "pointerdown", 21, 100, y);
+      pointer(svg, "pointermove", 21, 300, y);
+      pointer(svg, "pointerup", 21, 300, y);
       await ed.updateComplete;
       const walls = emitted[emitted.length - 1]?.floors![0].walls ?? [];
       return walls[walls.length - 1];
@@ -166,6 +165,27 @@ describe("trace template gestures", () => {
 });
 
 describe("wall thickness preference", () => {
+  it("keeps the chosen thickness for successive walls until it is changed", async () => {
+    const t = await mountEditor();
+    await t.button('button[title="Wall"]');
+    const set = async (value: number) => {
+      const input = t.root.querySelector<HTMLInputElement>(".context-bar input.num")!;
+      input.value = String(value);
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+      await t.ed.updateComplete;
+    };
+    await set(6);
+    expect((await t.drawWall(200))?.thickness).toBe(6);
+    expect((await t.drawWall(260))?.thickness).toBe(6);
+    await set(10);
+    expect((await t.drawWall(320))?.thickness).toBe(10);
+    expect(t.emitted[t.emitted.length - 1].floors![0].walls.map((w) => w.thickness)).toEqual([6, 6, 10]);
+    const reopened = await mountEditor();
+    await reopened.button('button[title="Wall"]');
+    expect((await reopened.drawWall())?.thickness).toBe(10);
+    expect(t.root.querySelector(".ctx-hint")?.textContent).toContain("until you change it");
+  });
+
   it.each([undefined, 6])("keeps thickness %s when its field is cleared", async (thickness) => {
     const t = await mountEditor();
     await t.button('button[title="Wall"]');

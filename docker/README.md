@@ -113,6 +113,11 @@ Then, in the sidebar:
   [`config/floorplan-demo.yaml`](config/floorplan-demo.yaml), which is what
   lives in git; `prepare.mjs` seeds a storage-mode dashboard from that file so
   the plan is both reviewable in the repo and editable in the browser.
+- **3D Stacked House** — a complete 3-level house fixture with outdoor courtyard
+  walls, driveway ramp, garden lawn, gazebo with shed roof, cross-gable roof
+  intersections, and subterranean foundation wall culling. Its starting content
+  comes from [`../src/fixtures/3floorHouse.yaml`](../src/fixtures/3floorHouse.yaml)
+  and is seeded as an editable storage-mode dashboard.
 - **Overview** — Home Assistant's auto-generated dashboard. Nothing here needs
   it, but if you want a second surface to drop a card onto, click the pencil
   and choose **⋮ → Take control** first: auto-generated dashboards are
@@ -152,12 +157,12 @@ npm run ha:reseed
 npm run ha:reset
 ```
 
-`ha:reseed` rewrites the Floorplan Demo dashboard from
-`config/floorplan-demo.yaml`, discarding whatever you did to it in the UI.
-Reach for it when an experiment has wandered somewhere you don't want, or
-after pulling a change to the committed plan — the seed only applies itself to
-a dashboard that does not exist yet, so your edits are never silently
-overwritten by a restart. The browser picks the change up on a refresh.
+`ha:reseed` rewrites the Floorplan Demo and 3D Stacked House dashboards from
+`config/floorplan-demo.yaml` and `src/fixtures/3floorHouse.yaml`, discarding
+whatever you did to them in the UI. Reach for it when an experiment has wandered
+somewhere you don't want, or after pulling a change to the committed plans — the
+seed only applies itself to a dashboard that does not exist yet, so your edits
+are never silently overwritten by a restart. The browser picks the change up on a refresh.
 
 The reverse direction is manual on purpose: if you build something in the
 editor worth keeping, copy the YAML out of the dashboard's **⋮ → Raw
@@ -399,6 +404,13 @@ npx vite --host 127.0.0.1 --port 5261
 Open [the 3D preview](http://127.0.0.1:5261/docker/3d-preview.html). It imports the
 actual card source and supplies simulated entities. Change the viewing corner,
 wall height and opacity; toggle doors, the roof window and its blind, and day/night; tap a room to check zoom.
+The card’s Rotate left/right buttons animate 90° turns in 3D.
+
+Run `node docker/verify-rotation.mjs` for a real-browser motion/layout check of
+this preview and the larger demo plan. It writes sampled animation frames,
+desktop/mobile screenshots and local frame timings to `.claude/rotation/`
+(or the output directory passed as the first argument).
+
 The icon placeholder is local to this preview. Use the HA container above to
 check real entity services, HA icons, editor selectors and history playback.
 

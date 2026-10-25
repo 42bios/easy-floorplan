@@ -1,3 +1,4 @@
+import { rotationBasis } from "./rotation";
 import { svg, html, nothing, type SVGTemplateResult, type TemplateResult } from "lit";
 import {
   BUILTIN_SYMBOLS,
@@ -34,6 +35,8 @@ import type {
   FloorText,
   OverlayScale,
   ActionConfig,
+  OutdoorZoneKind,
+  StripSide,
 } from "./types";
 import {
   FURNITURE_COLOR,
@@ -50,6 +53,7 @@ import {
   DEFAULT_SUN_MIN,
   DEFAULT_SUN_MAX,
   DEFAULT_GLOW_RADIUS,
+  MIN_STRIP_LENGTH,
   DEFAULT_GLOW_COLOR,
   DEFAULT_ITEM_SIZE,
   GLOW_MIN_OPACITY,
@@ -128,6 +132,9 @@ export function hassRenderInputsChanged(
   // Both formatters, because a plan can be built entirely out of attribute
   // readings and would otherwise be watching a function it never calls.
   if (prev.formatEntityAttributeValue !== next.formatEntityAttributeValue) return true;
+  // Dark mode picks the light or dark side of every room tint, and HA flips it
+  // on a live card (an auto theme at sunset) without any entity changing.
+  if (prev.themes?.darkMode !== next.themes?.darkMode) return true;
   for (const id of watchedEntities) {
     if (prev.states[id] !== next.states[id]) return true;
   }
@@ -229,6 +236,9 @@ export function collectWatchedEntities(c: FloorplanCardConfig): Set<string> {
         if (s?.presence?.entity) ids.add(s.presence.entity);
       }
     }
+    if (f.summary?.temperatureEntity) ids.add(f.summary.temperatureEntity);
+    if (f.summary?.humidityEntity) ids.add(f.summary.humidityEntity);
+    if (f.summary?.presenceEntity) ids.add(f.summary.presenceEntity);
   }
   return ids;
 }
@@ -1100,6 +1110,12 @@ export function renderGlow(
   // Brightness-scaled (issue #123), computed once on the paint so the pool and
   // the sun-dimming clearing are the same size for the same lamp.
   const r = paint.radius;
+  // An LED strip (issue #298) casts along its run rather than from a point.
+  const run = stripRun(item);
+  if (run) {
+    const reachAlong = walls?.length ? stripReach(run, r, walls) : undefined;
+    return renderStripPool(run, r, paint.color, paint.opacity, gradientId, reachAlong, "fp-glow");
+  }
   // Walls block light (issue #108): clip the pool to what the lamp can see.
   const reach = walls?.length ? glowReach(item.x, item.y, r, walls) : undefined;
   const clipId = `${gradientId}-clip`;
@@ -1119,6 +1135,299 @@ export function renderGlow(
     <circle class="fp-glow" cx=${item.x} cy=${item.y} r=${r}
             fill=${`url(#${gradientId})`}
             clip-path=${reach ? `url(#${clipId})` : nothing} />`;
+}
+
+/**
+ * An LED strip's run on the plan (issue #298): where its two ends are, the way
+ * it runs, and which side of it is lit.
+ */
+export interface StripRun {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  /** Unit vector from the first end to the second. */
+  dx: number;
+  dy: number;
+  length: number;
+  side: StripSide;
+}
+
+const round2 = (v: number) => Math.round(v * 100) / 100;
+
+/**
+ * The run a device casts along, or undefined for an ordinary point lamp — no
+ * length, or one too short to have a direction worth lighting across.
+ *
+ * Centred on the device, so the icon sits at the strip's middle and dragging
+ * the device carries the whole run with it.
+ */
+export function stripRun(
+  item: Pick<FloorItem, "x" | "y" | "stripLength" | "stripAngle" | "stripSide">,
+): StripRun | undefined {
+  const length = cssNumber(item.stripLength, 0);
+  if (!(length >= MIN_STRIP_LENGTH)) return undefined;
+  const a = (cssNumber(item.stripAngle, 0) * Math.PI) / 180;
+  const dx = Math.cos(a);
+  const dy = Math.sin(a);
+  const h = length / 2;
+  return {
+    x1: round2(item.x - dx * h),
+    y1: round2(item.y - dy * h),
+    x2: round2(item.x + dx * h),
+    y2: round2(item.y + dy * h),
+    dx,
+    dy,
+    length,
+    side: item.stripSide === "left" || item.stripSide === "right" ? item.stripSide : "both",
+  };
+}
+
+/**
+ * The inverse of {@link stripRun}: the device fields that put a strip's ends
+ * at these two points. The editor drags an end and writes this back.
+ */
+export function stripFromEnds(
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+): Pick<FloorItem, "x" | "y" | "stripLength" | "stripAngle"> {
+  const deg = (Math.atan2(y2 - y1, x2 - x1) * 180) / Math.PI;
+  return {
+    x: round2((x1 + x2) / 2),
+    y: round2((y1 + y2) / 2),
+    stripLength: round2(Math.hypot(x2 - x1, y2 - y1)),
+    stripAngle: round2(((deg % 360) + 360) % 360),
+  };
+}
+
+/** The normal a strip lights along: its left as it runs, or its right. */
+function stripNormal(run: StripRun): { nx: number; ny: number } {
+  // y points down on the plan, so "left" of (dx, dy) is (dy, -dx).
+  return run.side === "right" ? { nx: -run.dy, ny: run.dx } : { nx: run.dy, ny: -run.dx };
+}
+
+/** Most points a strip's wall occlusion is sampled from, however long it runs. */
+const STRIP_SAMPLES_MAX = 16;
+
+/** One piece of what a strip can see: a {@link glowReach} polygon, or a whole disc. */
+export type StripReachPart =
+  | { points: Array<{ x: number; y: number }> }
+  | { cx: number; cy: number; r: number };
+
+/**
+ * What an LED strip can see past the walls (issue #298): the union of
+ * {@link glowReach} from points along its run, or undefined when no wall gets
+ * in the way of any of them.
+ *
+ * A point lamp's sweep needs one centre, and a strip has none — so it is
+ * sampled, and every sample's reach is widened by the gap to the next one, so
+ * the union always covers the pool between them. Samples stop short of each
+ * end by more than a wall's width: a strip run into a room corner sits on the
+ * wall that crosses there, and from on top of a wall the sweep ignores it — the
+ * end cap would light the room behind the corner.
+ *
+ * A one-sided strip is sampled a wall's width out on its lit side, off the
+ * wall it is mounted on, so the walls it runs between still count. The pool's
+ * own shape already stops at the run, so the mounting wall needs no help to
+ * keep the far room dark.
+ */
+export function stripReach(
+  run: StripRun,
+  r: number,
+  walls: readonly Wall[],
+): StripReachPart[] | undefined {
+  const inset = Math.min(WALL_THICKNESS * 1.5, run.length / 2);
+  const span = run.length - inset * 2;
+  const count =
+    span <= 0
+      ? 1
+      : Math.min(STRIP_SAMPLES_MAX, Math.ceil(span / Math.max(r / 2, WALL_THICKNESS)) + 1);
+  const gap = count > 1 ? span / (count - 1) : 0;
+  const off = run.side === "both" ? 0 : WALL_THICKNESS;
+  const { nx, ny } = stripNormal(run);
+  // Every point of the pool is within `r` of the run, every point of the run
+  // within max(inset, gap / 2) of a sample, and each sample `off` from the run.
+  const reachR = r + Math.max(inset, gap / 2) + off;
+  const parts: StripReachPart[] = [];
+  let blocked = false;
+  for (let i = 0; i < count; i++) {
+    const t = count > 1 ? inset + gap * i : run.length / 2;
+    const cx = run.x1 + run.dx * t + nx * off;
+    const cy = run.y1 + run.dy * t + ny * off;
+    const points = glowReach(cx, cy, reachR, walls);
+    if (points) blocked = true;
+    parts.push(points ? { points } : { cx: round2(cx), cy: round2(cy), r: round2(reachR) });
+  }
+  return blocked ? parts : undefined;
+}
+
+/**
+ * An LED strip's pool (issue #298): the point lamp's falloff swept along a run.
+ *
+ * A capsule — a band with a gradient across it, and a disc at each end with
+ * the lamp's own radial gradient — so the light fades the same way at every
+ * edge. A row of point pools instead reads as beads, and where screen-blended
+ * pools overlap the strip's middle would outshine its ends.
+ *
+ * The pieces only build the **falloff**, as an opaque grey mask, and the light
+ * itself is one rectangle drawn through it. Painting the pieces translucent and
+ * side by side left a seam at each end (a review on #372): each piece's edge
+ * at the join is anti-aliased on its own, so the backdrop shows through the
+ * shared pixel — a hairline across the whole depth of the pool. Opaque pieces
+ * cover rather than add. The caps go down first, each clipped to its own half
+ * of the run so they do not paint over each other on a short strip, and the
+ * band covers the join last, so at an edge pixel it blends with a cap that
+ * already holds almost the same value. What is left is a fraction of a pixel's
+ * error beside the run line, under the strip's own stroke.
+ *
+ * One-sided, the band runs from the strip out to its lit side only, and the
+ * end caps are quarter discs.
+ *
+ * Shared by the glow and the sun-dimming mask, which paint the same shape in a
+ * colour and in black — `cls` is the glow's blend class, left off in the mask.
+ */
+export function renderStripPool(
+  run: StripRun,
+  r: number,
+  color: string,
+  opacity: number,
+  gid: string,
+  reach: readonly StripReachPart[] | undefined,
+  cls?: string,
+): SVGTemplateResult {
+  const { nx, ny } = stripNormal(run);
+  const { x1, y1, x2, y2, dx, dy } = run;
+  const both = run.side === "both";
+  // How far the pool reaches back across the run: as far as forward for a
+  // free strip, not at all for one on a wall.
+  const back = both ? r : 0;
+  const pt = (x: number, y: number) => `${round2(x)},${round2(y)}`;
+  const band = [
+    pt(x1 - nx * back, y1 - ny * back),
+    pt(x2 - nx * back, y2 - ny * back),
+    pt(x2 + nx * r, y2 + ny * r),
+    pt(x1 + nx * r, y1 + ny * r),
+  ].join(" ");
+  const mx = (x1 + x2) / 2;
+  const my = (y1 + y2) / 2;
+  // An end's half of the plane, from the middle of the run out past its end;
+  // (sx, sy) points away from the strip. Its edge at the middle lies under
+  // the band, which is what keeps it from showing.
+  const cap = (ex: number, ey: number, sx: number, sy: number) =>
+    [
+      pt(mx - nx * back, my - ny * back),
+      pt(mx + nx * r, my + ny * r),
+      pt(ex + nx * r + sx * r, ey + ny * r + sy * r),
+      pt(ex - nx * back + sx * r, ey - ny * back + sy * r),
+    ].join(" ");
+  // The mask's region and the light's rectangle: the run, r out on every side.
+  const box = {
+    x: round2(Math.min(x1, x2) - r - 1),
+    y: round2(Math.min(y1, y2) - r - 1),
+    w: round2(Math.abs(x2 - x1) + r * 2 + 2),
+    h: round2(Math.abs(y2 - y1) + r * 2 + 2),
+  };
+  const clipId = `${gid}-clip`;
+  const capGradient = (k: string, ex: number, ey: number) => svg`
+    <radialGradient id=${`${gid}-${k}`} gradientUnits="userSpaceOnUse"
+                    cx=${ex} cy=${ey} r=${r}>
+      <stop offset="0" stop-color="#fff" />
+      <stop offset="1" stop-color="#000" />
+    </radialGradient>`;
+  return svg`
+    ${
+      reach
+        ? svg`<clipPath id=${clipId}>
+                ${reach.map((p) =>
+                  "points" in p
+                    ? svg`<polygon points=${p.points.map((q) => `${q.x},${q.y}`).join(" ")} />`
+                    : svg`<circle cx=${p.cx} cy=${p.cy} r=${p.r} />`
+                )}
+              </clipPath>`
+        : nothing
+    }
+    <linearGradient id=${`${gid}-run`} gradientUnits="userSpaceOnUse"
+                    x1=${round2(mx - nx * back)} y1=${round2(my - ny * back)}
+                    x2=${round2(mx + nx * r)} y2=${round2(my + ny * r)}>
+      ${
+        both
+          ? svg`<stop offset="0" stop-color="#000" />
+                <stop offset="0.5" stop-color="#fff" />`
+          : svg`<stop offset="0" stop-color="#fff" />`
+      }
+      <stop offset="1" stop-color="#000" />
+    </linearGradient>
+    ${capGradient("a", x1, y1)}
+    ${capGradient("b", x2, y2)}
+    <clipPath id=${`${gid}-ca`}><polygon points=${cap(x1, y1, -dx, -dy)} /></clipPath>
+    <clipPath id=${`${gid}-cb`}><polygon points=${cap(x2, y2, dx, dy)} /></clipPath>
+    <mask id=${`${gid}-fall`} maskUnits="userSpaceOnUse"
+          x=${box.x} y=${box.y} width=${box.w} height=${box.h}>
+      <circle cx=${x1} cy=${y1} r=${r} fill=${`url(#${gid}-a)`} clip-path=${`url(#${gid}-ca)`} />
+      <circle cx=${x2} cy=${y2} r=${r} fill=${`url(#${gid}-b)`} clip-path=${`url(#${gid}-cb)`} />
+      <polygon points=${band} fill=${`url(#${gid}-run)`} />
+    </mask>
+    <g class=${cls ?? nothing} clip-path=${reach ? `url(#${clipId})` : nothing}>
+      <rect x=${box.x} y=${box.y} width=${box.w} height=${box.h}
+            fill=${color} fill-opacity=${opacity} mask=${`url(#${gid}-fall)`} />
+    </g>`;
+}
+
+/**
+ * The strip itself (issue #298), drawn along its run so it reads as a light
+ * source rather than as structure: a thin line in the light's own colour while
+ * it is on, and a dashed one while it is off — the pool is gone then, and the
+ * strip should not vanish with it.
+ *
+ * A one-sided strip draws just in front of its wall, a wall's width out on its
+ * lit side, rather than down the centreline: there it shows which side it
+ * lights, and the isometric view's standing walls do not bury it (review on
+ * #372) — half a width would put it exactly on the foot of the wall's face.
+ * Only the line moves; the pool is still cast from the run.
+ *
+ * `color` is the paint's, already through the allowlist; undefined is off. A
+ * style rather than a `stroke` attribute, which the stylesheet's own would beat.
+ */
+export function renderStripLine(run: StripRun, color: string | undefined): SVGTemplateResult {
+  const { nx, ny } = stripNormal(run);
+  const off = run.side === "both" ? 0 : WALL_THICKNESS;
+  return svg`<line class=${color ? "fp-strip on" : "fp-strip"}
+                   x1=${round2(run.x1 + nx * off)} y1=${round2(run.y1 + ny * off)}
+                   x2=${round2(run.x2 + nx * off)} y2=${round2(run.y2 + ny * off)}
+                   style=${color ? `stroke: ${color}` : nothing} />`;
+}
+
+/**
+ * The outline of a strip's pool at radius `r`, as a path — the editor's guide
+ * for a selected strip, as the dashed circle is for a point lamp (issue #108).
+ * Traces the shape {@link renderStripPool} fills: a capsule, or half of one.
+ */
+export function stripOutline(run: StripRun, r: number): string {
+  const { nx, ny } = stripNormal(run);
+  const { x1, y1, x2, y2, dx, dy } = run;
+  const p = (x: number, y: number) => `${round2(x)} ${round2(y)}`;
+  // Arcs turn the same way the normal does: clockwise on screen from the left.
+  const sweep = run.side === "right" ? 0 : 1;
+  const arc = (x: number, y: number) => `A ${round2(r)} ${round2(r)} 0 0 ${sweep} ${p(x, y)}`;
+  if (run.side === "both") {
+    return [
+      `M ${p(x1 + nx * r, y1 + ny * r)}`,
+      `L ${p(x2 + nx * r, y2 + ny * r)}`,
+      arc(x2 - nx * r, y2 - ny * r),
+      `L ${p(x1 - nx * r, y1 - ny * r)}`,
+      arc(x1 + nx * r, y1 + ny * r),
+      "Z",
+    ].join(" ");
+  }
+  return [
+    `M ${p(x1 - dx * r, y1 - dy * r)}`,
+    arc(x1 + nx * r, y1 + ny * r),
+    `L ${p(x2 + nx * r, y2 + ny * r)}`,
+    arc(x2 + dx * r, y2 + dy * r),
+    "Z",
+  ].join(" ");
 }
 
 /**
@@ -1195,6 +1504,13 @@ export function renderSunDimMask(
           if (clearing === undefined) return nothing;
           const { strength, radius: r } = clearing;
           const gid = `${id}-${i}`;
+          // A strip clears the night along its run, the same shape its pool
+          // takes (issue #298), and walls stop it the same way.
+          const run = stripRun(it);
+          if (run) {
+            const reachAlong = walls?.length ? stripReach(run, r, walls) : undefined;
+            return renderStripPool(run, r, "#000", strength, gid, reachAlong);
+          }
           // Walls stop the clearing exactly as they stop the pool (issue #108),
           // reusing the same visibility polygon — otherwise a lit room lifts
           // the darkness in the room next door, through the wall between them.
@@ -2449,6 +2765,34 @@ const DOMAIN_BADGE_READING: Record<string, { attribute: string; unit: string }> 
   humidifier: { attribute: "current_humidity", unit: "%" },
 };
 
+/**
+ * Attributes the badge cannot print as the number on the wire, keyed by the
+ * domain of the entity being read. A light's `brightness` is 0-255, and HA's
+ * own attribute formatter, the one a label reads through, words it as
+ * `Math.round((value / 255) * 100)` with a `%`. The badge deliberately skips
+ * that formatter ({@link badgeValue}: display precision and full units do not
+ * fit in a circle), so it has to apply the conversion itself: the same reading
+ * must not read "50%" in a label and "128" in a badge (issue #359).
+ *
+ * Entries are conversions HA itself defines for that domain's attribute,
+ * nothing invented here, but the table covers only what has been added so
+ * far, not every conversion HA defines. A `brightness` reading off any other
+ * domain stays raw.
+ */
+const DOMAIN_ATTRIBUTE_BADGE_TEXT: Record<string, Record<string, (n: number) => string>> = {
+  light: {
+    brightness: (n) => `${Math.round((n / 255) * 100)}%`,
+  },
+};
+
+/**
+ * One attribute's badge text under its own domain's conversion, or undefined
+ * when the attribute has none and the number is printed as it stands.
+ */
+function attributeBadgeText(entity: string, attribute: string, n: number): string | undefined {
+  return DOMAIN_ATTRIBUTE_BADGE_TEXT[entity.split(".")[0]]?.[attribute]?.(n);
+}
+
 /** A finite number from a state/attribute value, or undefined. Booleans and blanks are not readings. */
 function numericReading(raw: unknown): number | undefined {
   if (raw == null || typeof raw === "boolean") return undefined;
@@ -2589,14 +2933,20 @@ export function badgeReading(
   const primary = (): string | undefined => {
     const st = hass.states[item.entity as string];
     const attrs = st?.attributes as Record<string, unknown> | undefined;
-    const reading = DOMAIN_BADGE_READING[(item.entity as string).split(".")[0]];
+    const entity = item.entity as string;
+    const reading = DOMAIN_BADGE_READING[entity.split(".")[0]];
     if (item.attribute) {
       const n = numericReading(attrs?.[item.attribute]);
       // A unit only when we know it belongs to *this* attribute:
       // `unit_of_measurement` describes the state, not an arbitrary attribute,
       // so borrowing it here would label a battery percentage "°C".
-      if (n !== undefined)
+      if (n !== undefined) {
+        // A domain-worded attribute (a light's brightness) brings its own
+        // text, unit included; only the rest borrow a unit from the table.
+        const worded = attributeBadgeText(entity, item.attribute, n);
+        if (worded !== undefined) return worded;
         return compactNumber(n) + (item.attribute === reading?.attribute ? reading.unit : "");
+      }
     }
     if (reading) {
       const n = numericReading(attrs?.[reading.attribute]);
@@ -2616,7 +2966,10 @@ export function badgeReading(
     const attrs = st?.attributes as Record<string, unknown> | undefined;
     if (r.attribute) {
       const n = numericReading(attrs?.[r.attribute]);
-      return n === undefined ? undefined : compactNumber(n);
+      if (n === undefined) return undefined;
+      // Same domain wording as the configured attribute above, so a brightness
+      // reading in the pool (the issue's config) reads percent too.
+      return attributeBadgeText(entity, r.attribute, n) ?? compactNumber(n);
     }
     const n = numericReading(st?.state);
     return n === undefined ? undefined : formatReading(n, attrs?.unit_of_measurement);
@@ -3538,7 +3891,7 @@ export const SHUTTER_MARK_ICON_SIZE = 15;
  */
 export function shutterMarkNormal(
   o: Pick<Opening, "angle" | "flipV">,
-  rot: PlanRotation = 0,
+  rot: number = 0,
 ): { x: number; y: number } {
   const s = o.flipV ? -1 : 1;
   const rad = (o.angle * Math.PI) / 180;
@@ -3547,7 +3900,8 @@ export function shutterMarkNormal(
   if (rot === 90) return { x: -n.y, y: n.x };
   if (rot === 180) return { x: -n.x, y: -n.y };
   if (rot === 270) return { x: n.y, y: -n.x };
-  return n;
+  const { cos, sin } = rotationBasis(rot);
+  return { x: n.x * cos - n.y * sin, y: n.x * sin + n.y * cos };
 }
 
 /**
@@ -3778,7 +4132,7 @@ export function openingMarkPoint(
 
 export function openingMarkNormal(
   o: Pick<Opening, "angle" | "flipV">,
-  rot: PlanRotation = 0,
+  rot: number = 0,
 ): { x: number; y: number } {
   const n = shutterMarkNormal(o, rot);
   return { x: -n.x, y: -n.y };
@@ -4308,7 +4662,16 @@ export function renderOpening(o: Opening, style: OpeningStyle): SVGTemplateResul
             shutterTone2,
             shutterAmt2
           )
-        : rollCurtain(o.length, shutterTone, shutterAmt)
+        : svg`${
+            // Up or moving, the track wears the shutter's accent (issue #375),
+            // as a roll-up door's does (#154): fully raised the curtain has
+            // scaled away, and without this line the colour only ever showed
+            // part-way down. Shut, the band covers the line, so none is drawn.
+            style.shutter.active
+              ? svg`<line x1=${-half} y1="0" x2=${half} y2="0"
+                    stroke=${shutterTone} stroke-width="0.75" />`
+              : nothing
+          }${rollCurtain(o.length, shutterTone, shutterAmt)}`
     }`;
   }
   const { sx, sy } = openingMirror(o);
@@ -4450,13 +4813,14 @@ function switcherCoord(v: unknown): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
-/** Canvas size as displayed: 90°/270° swap width and height. */
+/** Axis-aligned bounds of the rotated plan, including intermediate orbit angles. */
 export function rotatedCanvasSize(
   w: number,
   h: number,
-  rot: PlanRotation
+  rot: number
 ): { w: number; h: number } {
-  return rot === 90 || rot === 270 ? { w: h, h: w } : { w, h };
+  const { cos, sin } = rotationBasis(rot);
+  return { w: Math.abs(cos) * w + Math.abs(sin) * h, h: Math.abs(sin) * w + Math.abs(cos) * h };
 }
 
 /**
@@ -4474,7 +4838,7 @@ export function rotatedCanvasSize(
  * bearing of 0 becomes 90. The result is normalised into 0..360 so callers can
  * hand it straight to CSS.
  */
-export function rotatePlanAngle(angle: number, rot: PlanRotation): number {
+export function rotatePlanAngle(angle: number, rot: number): number {
   const a = cssNumber(angle, 0) + rot;
   return ((a % 360) + 360) % 360;
 }
@@ -4485,7 +4849,7 @@ export function rotatePlanPoint(
   y: number,
   w: number,
   h: number,
-  rot: PlanRotation
+  rot: number
 ): { x: number; y: number } {
   switch (rot) {
     case 90:
@@ -4494,8 +4858,14 @@ export function rotatePlanPoint(
       return { x: w - x, y: h - y };
     case 270:
       return { x: y, y: w - x };
-    default:
+    case 0:
       return { x, y };
+    default: {
+      const { cos, sin } = rotationBasis(rot);
+      const d = rotatedCanvasSize(w, h, rot);
+      return { x: (x - w / 2) * cos - (y - h / 2) * sin + d.w / 2,
+        y: (x - w / 2) * sin + (y - h / 2) * cos + d.h / 2 };
+    }
   }
 }
 
@@ -4505,7 +4875,7 @@ export function rotatePlanPoint(
  * (HTML, remapped per point) and the drawing (SVG, one transform) must land
  * on the same pixels or badges drift off their walls.
  */
-export function planRotationTransform(w: number, h: number, rot: PlanRotation): string {
+export function planRotationTransform(w: number, h: number, rot: number): string {
   switch (rot) {
     case 90:
       return `translate(${h} 0) rotate(90)`;
@@ -4513,8 +4883,12 @@ export function planRotationTransform(w: number, h: number, rot: PlanRotation): 
       return `translate(${w} ${h}) rotate(180)`;
     case 270:
       return `translate(0 ${w}) rotate(-90)`;
-    default:
+    case 0:
       return "";
+    default: {
+      const d = rotatedCanvasSize(w, h, rot);
+      return `translate(${d.w / 2} ${d.h / 2}) rotate(${rot}) translate(${-w / 2} ${-h / 2})`;
+    }
   }
 }
 
@@ -5343,6 +5717,22 @@ function openingEnds(o: Opening): [AreaPoint, AreaPoint] {
 }
 
 /**
+ * A railing as the gap the sun comes in by: an opening spanning it end to end.
+ * Only its position, length and angle are read — it is never asked how far it
+ * is open, since a railing is always clear.
+ */
+function railingGap(w: Wall): Opening {
+  return {
+    id: w.id,
+    type: "window",
+    x: (w.x1 + w.x2) / 2,
+    y: (w.y1 + w.y2) / 2,
+    length: Math.hypot(w.x2 - w.x1, w.y2 - w.y1),
+    angle: (Math.atan2(w.y2 - w.y1, w.x2 - w.x1) * 180) / Math.PI,
+  };
+}
+
+/**
  * Ray-casting point-in-polygon test. Points exactly on an edge may resolve
  * either way (not a documented guarantee) — every caller only needs an
  * approximate "did this land inside" answer, not exact edge semantics.
@@ -5532,6 +5922,15 @@ export interface SunlightOptions {
    * {@link FloorplanCardConfig.skylightDrop} for why it is stated that way.
    */
   drop?: number;
+  /**
+   * The plan's railings. They are not in the `walls` handed to
+   * {@link renderSunlight} — the sun goes over them — but they are where it
+   * comes in: each one admits light along its whole length, as a gap that is
+   * always clear. Without them a balcony behind a railing stayed dark while
+   * the glass door at its back lit the room beyond, the sun having come over
+   * the railing for the door and nowhere else.
+   */
+  railings?: readonly Wall[];
   light?: string;
   /**
    * `null` draws the light without darkening anything else — the patches
@@ -5550,7 +5949,7 @@ export function renderSunlight(
   id: string,
   opts: SunlightOptions,
 ): SVGTemplateResult | typeof nothing {
-  const { dir, openAmount, shutterOpen, strength = 1 } = opts;
+  const { dir, openAmount, shutterOpen, strength = 1, railings = [] } = opts;
   const direct =
     typeof opts.direct === "number" && Number.isFinite(opts.direct)
       ? Math.max(0, Math.min(1, opts.direct))
@@ -5671,6 +6070,53 @@ export function renderSunlight(
   // Each beam keeps the opening it came from: the fade runs from that
   // opening's own centre along the light, so every patch dims over its own
   // length rather than sharing one gradient across the plan.
+  // Railings stand in the way here, and only here. Light that reached a door
+  // over a railing is the railing's beam, carried on through the door's gap —
+  // the door is not a second sun, any more than a doorway behind a window is
+  // (#177 / #178). Counted as a source too, it lit the room beyond twice.
+  const sourceWalls = railings.length ? [...walls, ...railings] : walls;
+  /** The beam through a gap in a wall — an opening's, or a railing's — clear by `f`. */
+  const gapBeam = (
+    o: Opening,
+    ids: { lightId: string; shadeId: string; fadeId: string; shadowMaskId: string; clipId: string },
+    f: number,
+  ) => {
+    if (!sunReachesOpening(o, sourceWalls, dir)) return undefined;
+    // How far the light gets before a wall stops it. The falloff is measured
+    // against this, so a patch is faint by the time it ends however deep or
+    // shallow the room is.
+    const along = sunTravelDistance(o, dir, blockers, reach);
+    // …and how wide it is, measured across the light rather than along the
+    // wall: a gap seen obliquely admits a narrower beam than its own length.
+    const [ga, gb] = openingEnds(o);
+    const gx = gb.x - ga.x;
+    const gy = gb.y - ga.y;
+    const width = Math.abs(gx * dir.y - gy * dir.x) * f;
+    // Half of it, because the gradient below is scaled by *semi*-axes: the
+    // ellipse reaches `across` from the beam's middle, and the beam only has
+    // half its width to give on each side (issue #206).
+    const halfWidth = width / 2;
+    return {
+      ...ids,
+      sky: false,
+      // The outline runs past the falloff, so the ellipse is what bounds the
+      // patch and never the polygon's flat far edge.
+      points: polyPoints(sunBeamPolygon(o, dir, along + o.length, f)),
+      cx: o.x,
+      cy: o.y,
+      along,
+      across: Math.max(1, halfWidth * SUN_ACROSS),
+      angle: (Math.atan2(dir.y, dir.x) * 180) / Math.PI,
+      // A beam has no edge to soften — it fades along its own length — so it
+      // has no second polygon, and no shadow set of its own either: the wall
+      // openings all share the one global shadow mask.
+      haloPoints: "",
+      halo: undefined as undefined | { cx: number; cy: number; angle: number; along: number; across: number },
+      haloLightId: "",
+      haloShadeId: "",
+      shadows: [] as string[],
+    };
+  };
   const beams = openings.map((o, i) => {
     const ids = {
       lightId: `${id}-b${i}`,
@@ -5717,42 +6163,25 @@ export function renderSunlight(
         shadows: downwindShadows(o),
       };
     }
-    if (!sunReachesOpening(o, walls, dir)) return undefined;
-    // How far the light gets before a wall stops it. The falloff is measured
-    // against this, so a patch is faint by the time it ends however deep or
-    // shallow the room is.
-    const along = sunTravelDistance(o, dir, blockers, reach);
-    // …and how wide it is, measured across the light rather than along the
-    // wall: a gap seen obliquely admits a narrower beam than its own length.
-    const [ga, gb] = openingEnds(o);
-    const gx = gb.x - ga.x;
-    const gy = gb.y - ga.y;
-    const width = Math.abs(gx * dir.y - gy * dir.x) * clear(o);
-    // Half of it, because the gradient below is scaled by *semi*-axes: the
-    // ellipse reaches `across` from the beam's middle, and the beam only has
-    // half its width to give on each side (issue #206).
-    const halfWidth = width / 2;
-    return {
-      ...ids,
-      sky: false,
-      // The outline runs past the falloff, so the ellipse is what bounds the
-      // patch and never the polygon's flat far edge.
-      points: polyPoints(sunBeamPolygon(o, dir, along + o.length, f)),
-      cx: o.x,
-      cy: o.y,
-      along,
-      across: Math.max(1, halfWidth * SUN_ACROSS),
-      angle: (Math.atan2(dir.y, dir.x) * 180) / Math.PI,
-      // A beam has no edge to soften — it fades along its own length — so it
-      // has no second polygon, and no shadow set of its own either: the wall
-      // openings all share the one global shadow mask.
-      haloPoints: "",
-      halo: undefined as undefined | { cx: number; cy: number; angle: number; along: number; across: number },
-      haloLightId: "",
-      haloShadeId: "",
-      shadows: [] as string[],
-    };
+    // An opening in a railing adds nothing: the railing's own beam below
+    // already covers its whole length, and a second one over the same gap
+    // drew that stretch of floor twice as bright as the rest of the balcony.
+    if (railings.some((w) => pointWallDist(o.x, o.y, w) <= OPENING_ON_WALL_EPS)) return undefined;
+    return gapBeam(o, ids, f);
   });
+  // The railings after the openings, under ids of their own: numbered in with
+  // the openings, adding a window would renumber every railing's gradient —
+  // the stale-paint-server failure the comment above is about.
+  const railingBeams = railings.map((w, j) =>
+    gapBeam(railingGap(w), {
+      lightId: `${id}-rb${j}`,
+      shadeId: `${id}-rs${j}`,
+      fadeId: `${id}-rf${j}`,
+      shadowMaskId: `${id}-rk${j}`,
+      clipId: `${id}-rc${j}`,
+    }, 1),
+  );
+  beams.push(...railingBeams);
   if (!beams.some((b) => b !== undefined)) return nothing;
   const shadows = shadowPolys.map(polyPoints);
   const pad = WALL_THICKNESS;
@@ -5946,6 +6375,69 @@ export function renderSunlight(
 }
 
 /**
+ * Whether Home Assistant is showing its dark theme. `themes.darkMode` is the
+ * resolved answer — "auto" already settled against the device — but it is
+ * newer than the helper library's types, hence the cast.
+ */
+export function hassDarkMode(hass: unknown): boolean {
+  return !!(hass as { themes?: { darkMode?: boolean } } | undefined)?.themes?.darkMode;
+}
+
+/**
+ * Which background image a floor shows, and how, in light or dark mode
+ * (issue #366). A dark image of its own wins; otherwise the light one, inverted
+ * if asked. A floor with only a dark image shows nothing in light mode.
+ */
+export function floorImage(
+  floor: Pick<Floor, "image" | "imageDark" | "imageInvertDark">,
+  dark: boolean
+): { href: string; filter?: string } | undefined {
+  if (dark && floor.imageDark) return { href: floor.imageDark };
+  if (!floor.image) return undefined;
+  // invert() alone would turn a red radiator cyan; turning the hue back round
+  // keeps colours roughly what they were while light and dark swap.
+  if (dark && floor.imageInvertDark) return { href: floor.image, filter: "invert(1) hue-rotate(180deg)" };
+  return { href: floor.image };
+}
+
+/**
+ * Render direct sunlight & building wall shadows cast on outdoor floors (isOutdoor: true).
+ */
+export function renderOutdoorSunlight(
+  walls: readonly Wall[],
+  width: number,
+  height: number,
+  id: string,
+  opts: SunlightOptions,
+): SVGTemplateResult | typeof nothing {
+  const { dir, strength = 1 } = opts;
+  const direct =
+    typeof opts.direct === "number" && Number.isFinite(opts.direct)
+      ? Math.max(0, Math.min(1, opts.direct))
+      : 1;
+  if (strength <= 0) return nothing;
+
+  const reach = Math.min(width, height) * sunReachFraction(opts.reach);
+  const shadeColor = opts.shade === undefined ? SUN_SHADE_COLOR : opts.shade;
+  if (shadeColor === null) return nothing;
+
+  const shadowPolys = walls.map((w) => ({
+    poly: polyPoints(sunShadowPolygon(w, dir, reach)),
+    thickness: wallThickness(w.thickness),
+  }));
+  if (shadowPolys.length === 0) return nothing;
+
+  const opacity = SUN_SHADE * strength * direct;
+
+  return svg`
+    <g class="fp-sunlight fp-outdoor-sunlight" id=${id}>
+      ${shadowPolys.map((s) =>
+        svg`<polygon class="fp-outdoor-shadow" points=${s.poly} fill=${cssColorOr(shadeColor, SUN_SHADE_COLOR)} opacity=${opacity} stroke=${cssColorOr(shadeColor, SUN_SHADE_COLOR)} stroke-width=${s.thickness} />`
+      )}
+    </g>`;
+}
+
+/**
  * `preserveAspectRatio` for a floor's background image (issue #86).
  *
  * SVG already knows how to do this, so the fit option is a straight mapping
@@ -6100,7 +6592,7 @@ export function areaZoomTransform(
   points: readonly AreaPoint[],
   w: number,
   h: number,
-  rot: PlanRotation,
+  rot: number,
   padFrac = 0.15,
   maxScale = MAX_AREA_ZOOM_FIT,
   /**
@@ -6126,10 +6618,26 @@ export function areaZoomTransform(
   const d = projectedCanvasSize(f);
   const xs = rotated.map((p) => p.x);
   const ys = rotated.map((p) => p.y);
-  const minX = Math.min(...xs);
-  const maxX = Math.max(...xs);
-  const minY = Math.min(...ys) - (f.projection === "iso" ? f.wallHeight : 0);
-  const maxY = Math.max(...ys);
+  let minX = Math.min(...xs);
+  let maxX = Math.max(...xs);
+  let minY = Math.min(...ys) - (f.projection === "iso" ? f.wallHeight : 0);
+  let maxY = Math.max(...ys);
+  if (f.projection === "iso" && f.orbitSpan !== undefined) {
+    // Keep a focused room at one scale throughout its orbit, just like the
+    // whole floor. Its enclosing circle fits even at the widest midway angle.
+    const left = Math.min(...points.map((p) => p.x));
+    const right = Math.max(...points.map((p) => p.x));
+    const top = Math.min(...points.map((p) => p.y));
+    const bottom = Math.max(...points.map((p) => p.y));
+    const centre = rotatePlanPoint((left + right) / 2, (top + bottom) / 2, w, h, rot);
+    const at = projectPlanPoint(centre.x, centre.y, f);
+    const bounds = projectedCanvasSize({ ...f, padding: 0,
+      orbitSpan: Math.SQRT2 * Math.hypot(right - left, bottom - top) });
+    minX = at.x - bounds.w / 2;
+    maxX = at.x + bounds.w / 2;
+    minY = at.y - (bounds.h - f.wallHeight) / 2 - f.wallHeight;
+    maxY = at.y + (bounds.h - f.wallHeight) / 2;
+  }
   const pad = Math.max(maxX - minX, maxY - minY) * padFrac;
   const bw = Math.max(maxX - minX + pad * 2, 1);
   const bh = Math.max(maxY - minY + pad * 2, 1);
@@ -6265,13 +6773,43 @@ export function renderDeadSpace(
                       fill-opacity=${DEAD_SPACE_HATCH_OPACITY} stroke="none" />`;
 }
 
+export function outdoorZoneDefaultColor(kind?: OutdoorZoneKind): string | undefined {
+  switch (kind) {
+    case "lawn":
+      return "#4CAF50";
+    case "patio":
+      return "#9E9E9E";
+    case "pool":
+      return "#2196F3";
+    case "terrace":
+      return "#A1887F";
+    case "driveway":
+      return "#607D8B";
+    case "garden":
+      return "#8BC34A";
+    case "courtyard":
+      return "#D7CCC8";
+    default:
+      return undefined;
+  }
+}
+
 /**
  * A room's translucent fill polygon, with no stroke of its own — the outline
  * is a separate pass, drawn above the walls by {@link renderAreaBorder}.
  * `color`/`opacity` are config-supplied style values, so they go through the
  * same injection allowlist as every other color/number field (see css-safe.ts).
+ *
+ * `rest` is the automatic room tint (`roomTints: auto`, see room-tints.ts):
+ * what an uncoloured room rests at instead of the accent. It never applies to a
+ * room with its own `color` — the caller passes none for one — and a live fill
+ * still wins over it, so state colouring and `highlight` behave as before.
  */
-export function renderArea(a: Area, liveColor?: string): SVGTemplateResult {
+export function renderArea(
+  a: Area,
+  liveColor?: string,
+  rest?: { color: string; opacity: number }
+): SVGTemplateResult {
   const pts = a.points.map((p) => `${p.x},${p.y}`).join(" ");
   // `liveColor` has already been through the allowlist by areaColor(). When it
   // is present the area is "live" and `highlight` decides whether that color
@@ -6279,7 +6817,14 @@ export function renderArea(a: Area, liveColor?: string): SVGTemplateResult {
   const liveFill = liveColor !== undefined && (a.highlight ?? "fill") !== "border";
 
   // activeOpacity is a fill concern, so it only applies when the fill is live.
-  const opacity = liveFill ? a.activeOpacity ?? a.opacity : a.opacity;
+  // A room's own colour always beats a tint, whatever the caller passed, and
+  // so does an outdoor zone's default colour: a lawn stays lawn green.
+  const zoneColor = outdoorZoneDefaultColor(a.zoneKind);
+  const tint = a.color || zoneColor ? undefined : rest;
+  const opacity = liveFill ? a.activeOpacity ?? a.opacity : tint ? tint.opacity : a.opacity;
+  // A tint is a library constant built by roomTintFill, not config, so it
+  // needs no allowlist pass; the room's own colour still goes through one.
+  const restFill = tint ? tint.color : cssColorOr(a.color, zoneColor ?? SKIN_ACCENT);
 
   // Stroke stays pinned off rather than omitted: this element is reused across
   // live/rest updates, and stating it keeps the fill pass unable to draw an
@@ -6287,7 +6832,7 @@ export function renderArea(a: Area, liveColor?: string): SVGTemplateResult {
   return svg`<polygon class="fp-area" data-id=${cssIdent(a.id) ?? nothing}
                        data-entity=${cssEntityId(a.entity) ?? nothing}
                        points=${pts}
-                       fill=${liveFill ? liveColor : cssColorOr(a.color, SKIN_ACCENT)}
+                       fill=${liveFill ? liveColor : restFill}
                        fill-opacity=${cssNumber(opacity, DEFAULT_AREA_OPACITY)}
                        stroke="none"
                        stroke-width="0" />`;

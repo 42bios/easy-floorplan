@@ -131,14 +131,19 @@ export function resizeTraceWidth(t: TraceTemplate, width: number): TraceTemplate
 // Loading
 // ---------------------------------------------------------------------------
 
-/**
- * pdf.js, fetched on first use rather than bundled. Only the rare editor
- * session that drops a PDF pays for it; the card itself — loaded on every
- * dashboard view — stays exactly the size it was. Pinned, so the code that
- * runs is the code this was tested with.
- */
+/** PDF code is fetched lazily, verified by the browser before any execution. */
 export const PDFJS_VERSION = "4.10.38";
 const PDFJS_BASE = `https://cdn.jsdelivr.net/npm/pdfjs-dist@${PDFJS_VERSION}/build/`;
+// Verified against the integrity-checked npm tarball for pdfjs-dist@4.10.38.
+const PDFJS_INTEGRITY = "sha384-+0ti2moQlmLN7WZHE2RHIf5lV8hHxhxEalN0il3YZceG26fUPyOkR0hp9daxk1i7";
+const PDFJS_WORKER_INTEGRITY = "sha384-ToeVvShCxKc6CEvhHeMt0Q8A06pSPDbAlngO9nokrDmh914gk/pYd0N7D0a4Lz2o";
+
+/** Fetch's SRI check also works on LAN HTTP, where crypto.subtle is unavailable. */
+export async function fetchVerifiedPdfSource(url: string, integrity: string): Promise<string> {
+  const response = await fetch(url, { integrity, mode: "cors", credentials: "omit" });
+  if (!response.ok) throw new Error(`PDF reader request failed (${response.status}).`);
+  return response.text();
+}
 
 /** The few pieces of the pdf.js API this uses. */
 interface PdfViewport {
@@ -161,27 +166,39 @@ interface PdfDocument {
 }
 interface PdfJs {
   GlobalWorkerOptions: { workerSrc: string };
-  getDocument(src: { data: Uint8Array }): { promise: Promise<PdfDocument> };
+  getDocument(src: { data: Uint8Array; isEvalSupported: false }): { promise: Promise<PdfDocument> };
 }
 
 let pdfjs: Promise<PdfJs> | null = null;
 
 function loadPdfJs(): Promise<PdfJs> {
-  pdfjs ??= import(/* @vite-ignore */ `${PDFJS_BASE}pdf.min.mjs`).then(
-    (m: PdfJs) => {
-      m.GlobalWorkerOptions.workerSrc = `${PDFJS_BASE}pdf.worker.min.mjs`;
-      return m;
-    },
-    (err: unknown) => {
-      // Let the next attempt try again (the network may be back).
+  pdfjs ??= (async () => {
+    let moduleUrl: string | undefined;
+    let workerUrl: string | undefined;
+    try {
+      // Neither source is executed unless both integrity checks succeed.
+      const [reader, worker] = await Promise.all([
+        fetchVerifiedPdfSource(`${PDFJS_BASE}pdf.min.mjs`, PDFJS_INTEGRITY),
+        fetchVerifiedPdfSource(`${PDFJS_BASE}pdf.worker.min.mjs`, PDFJS_WORKER_INTEGRITY),
+      ]);
+      moduleUrl = URL.createObjectURL(new Blob([reader], { type: "text/javascript" }));
+      workerUrl = URL.createObjectURL(new Blob([worker], { type: "text/javascript" }));
+      const lib = await import(/* @vite-ignore */ moduleUrl) as PdfJs;
+      // Kept for the lifetime of the cached reader; subsequent PDFs reuse it.
+      lib.GlobalWorkerOptions.workerSrc = workerUrl;
+      return lib;
+    } catch (err) {
+      if (workerUrl) URL.revokeObjectURL(workerUrl);
       pdfjs = null;
       throw new Error(
-        "Could not load the PDF reader (it is fetched from cdn.jsdelivr.net " +
-          "on first use). Check the connection, or export the page as PNG/JPG " +
-          `and load that instead. (${err instanceof Error ? err.message : String(err)})`
+        "Could not load and verify the PDF reader. Check the connection and browser policy, " +
+        "or export the page as PNG/JPG and load that instead. " +
+        `(${err instanceof Error ? err.message : String(err)})`
       );
+    } finally {
+      if (moduleUrl) URL.revokeObjectURL(moduleUrl);
     }
-  );
+  })();
   return pdfjs;
 }
 
@@ -207,7 +224,7 @@ export interface LoadedRaster {
 /** Render one page of a PDF to a PNG object URL. */
 export async function renderPdfPage(file: Blob, page = 1): Promise<LoadedRaster> {
   const lib = await loadPdfJs();
-  const doc = await lib.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
+  const doc = await lib.getDocument({ data: new Uint8Array(await file.arrayBuffer()), isEvalSupported: false }).promise;
   try {
     const n = Math.min(Math.max(1, Math.round(page)), doc.numPages);
     const p = await doc.getPage(n);

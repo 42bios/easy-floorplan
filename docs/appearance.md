@@ -21,6 +21,10 @@ skin: tron
 | `pastel` | Soft and low-contrast: muted mauve walls on blush paper, peach for active devices. Easy on a dashboard that stays on screen. |
 | `tron` | Neon on near-black: thin glowing cyan walls, amber for active devices, light text. Light pools read best here. |
 
+<img width="300" height="300" alt="Default skin" src="https://github.com/user-attachments/assets/ce2d6545-10f4-4aa2-bbd7-0dcae08c27f5" />
+<img width="300" height="300" alt="Odnetnin skin" src="https://github.com/user-attachments/assets/1d46f7a3-b894-4fcb-bdb9-a55270b8e4e4" />
+<img width="300" height="300" alt="Tron skin" src="https://github.com/user-attachments/assets/de5b0825-3bff-4817-8a26-8f887bab8c48" />
+
 A skin only supplies **fallbacks**, so anything you set on an element yourself still wins —
 a room's own `color`, a device's `activeColor`, a `background` on the plan. Switch skins
 freely without losing colors you chose by hand.
@@ -147,6 +151,45 @@ palette:
   - name: Accent
     color: var(--primary-color)
 ```
+
+## Room tints
+
+A plan whose rooms have no colour of their own draws them all in the same accent wash.
+Turn on **Look → Room tints** and each of those rooms gets a soft tint of its own instead:
+
+```yaml
+type: custom:easy-floorplan-card
+roomTints: auto
+```
+
+Rooms that share a wall avoid sharing a tint (only a room with eight or more tinted
+neighbours can't), and a room keeps its tint from one load to the
+next — it is picked from the room's id, moving on round the palette only when a neighbour
+already holds it. Adding a room elsewhere on the plan leaves the others alone; adding one
+beside a room can move that neighbour. Rooms meeting only at a corner count as apart.
+
+It only fills in a room's resting colour. A room with its own `color` keeps it, as does an
+outdoor zone with a default colour (a `zoneKind: lawn` stays lawn green), and a live
+`stateColor` or `activeColor` still takes over the fill (or the outline, under
+`highlight: border`) exactly as without tints. A tinted room rests at `0.18` opacity unless
+it sets its own `opacity`. Line art stays white, and the 3D view tints the same floors.
+
+There are eight tints, each with a value for light paper and a lighter one for dark: Home
+Assistant's dark mode picks the side, and so does a skin whose paper is fixed (`tron` is
+dark; `odnetnin` and `pastel` are light). To change one, set `--fp-room-tint-1` …
+`--fp-room-tint-8` in a theme or with card-mod, or add a [named color](#named-colors) called
+`Room tint 1` … `Room tint 8`:
+
+| | Light | Dark |
+| --- | --- | --- |
+| 1 sage | `#5f9a68` | `#9fd8a8` |
+| 2 sky | `#3f86c4` | `#8ec8f2` |
+| 3 lilac | `#8c6cc0` | `#c8b0f2` |
+| 4 sand | `#b48a48` | `#e6c790` |
+| 5 teal | `#2f9a90` | `#7fdcd0` |
+| 6 rose | `#bf6a8a` | `#f2aac4` |
+| 7 slate | `#6a7c96` | `#b6c4da` |
+| 8 olive | `#8c9640` | `#d0d884` |
 
 ## Top-hinged windows
 
@@ -302,6 +345,11 @@ between the sun and the balcony door behind it, so no sunlight ever came in that
 
 Set a wall's **Kind** to **Railing** and it is drawn thin, and light carries on over it —
 a lamp's pool spills past the edge, and the sun reaches the door again.
+
+The sun comes in over the whole length of a railing, so it lights the balcony floor and
+not only the door behind it. A glazed or open door carries that same light on into the
+room; it does not add a second patch of its own. A window or door in the railing adds
+none either, as the railing already lets the light through there.
 
 ![Before and after: a lamp pool clipped at the balcony edge, then spilling over a thin railing with sunlight entering the balcony door](img/balcony-railing.png)
 
@@ -628,7 +676,8 @@ to give viewers these controls directly on the card:
 
 - **2D / 3D** changes the projection.
 - **Normal / Line art** changes the drawing style.
-- **Rotate left / right** moves through the four viewing directions in 90° steps.
+- **Rotate left / right** turns through the four viewing directions in 90° steps.
+  In 3D the house moves smoothly around its centre; in 2D it switches immediately.
 - **Reset view** returns to the saved view, appearance and rotation and zooms out.
 
 ![Live line art with view controls and simulated devices](img/line-art-live-desktop.png)
@@ -658,6 +707,21 @@ card also restores its defaults. Reset keeps the active floor selected. The 3D
 view uses the existing isometric renderer and four viewing corners, with no free
 orbit camera.
 
+A 3D quarter-turn takes about half a second. Click again to keep turning or
+reverse direction; the next movement starts from the current position. Labels
+stay upright, device and opening actions follow the drawing, and a focused room
+stays selected. The angle beside the buttons is the destination. Reset cancels
+an unfinished turn and restores the saved defaults.
+
+With view controls enabled, 3D reserves enough space for every intermediate
+angle, including when a room is focused. Long, narrow plans can therefore look
+slightly smaller than a fixed-corner view, but keep the same scale while turning.
+The system's **Reduce motion** preference makes turns instantaneous; changing it
+mid-turn immediately settles the view. Switching to 2D or changing the screen's
+orientation also settles an unfinished turn.
+
+![A smooth 90-degree turn with simulated entities](../assets/issue-354/rotation-after.gif)
+
 The toolbar follows the Home Assistant theme, wraps for narrow cards, and supports
 keyboard focus and touch. Try the [live preview](../docker/README.md#live-appearance-preview)
 with simulated lights, doors and both themes.
@@ -667,8 +731,8 @@ with simulated lights, doors and both themes.
 Enable **Project → Display → Allow SVG download**, or add `showExport: true`, for
 an optional download button at the end of the view controls. Without view controls,
 it appears as **Export SVG** below the plan. Select a floor, then download it.
-The download uses the current 2D or 3D view and display rotation,
-including orientation overrides. It always includes the full canvas, even while
+The download uses the current 2D or 3D view and the selected destination rotation
+(even while a turn is still moving), including orientation overrides. It always includes the full canvas, even while
 zoomed into a room. Open the SVG directly in a browser, print it, or insert it into
 a document or vector editor.
 
@@ -733,8 +797,9 @@ selecting a view in the editor removes the old alias.
   tops, and the canvas includes a margin for wall caps at its edges.
 - Lower **Wall height** or **Wall opacity** to reveal more of a room. Everything
   standing in the wall plane fades together, doors and shutters included, while
-  glass keeps its own tint and furniture stays solid inside the room. Height remains
-  a fixed 60 canvas units by default while we experiment with different plan sizes.
+  glass keeps its own tint and furniture stays solid inside the room. Height is
+  60 canvas units by default, and can be customized globally (`wallHeight`) or
+  overridden on individual walls (`height`).
   Zero height lays the flat plan on an isometric floor: walls, furniture and opening
   symbols drawn exactly as the 2D view draws them.
 
@@ -765,6 +830,25 @@ Very acute wall joins are bevelled to avoid long spikes; their caps can still
 overlap and show a faint darker patch when walls are translucent.
 Furniture still uses a shared height. Pin-shaped device markers and per-symbol
 heights are also follow-ups.
+
+### Wall height
+
+Individual walls can override the card's global `wallHeight` with their own `height` property
+(from `0` to `400` canvas units):
+
+```yaml
+walls:
+  - id: wall_bar
+    x1: 100
+    y1: 150
+    x2: 180
+    y2: 150
+    height: 30 # half-wall / counter
+```
+
+Select any wall in the editor to adjust the **Height** slider under wall properties.
+- **Low walls and partitions**: Setting a lower height (e.g. `25`–`35`) creates half-walls, bar counters, pony walls, or partitions that don't block the view of furniture or room interiors behind them.
+- **Opening height matching**: Doors, windows, and passages placed along a wall automatically inherit the wall's height (`height * 0.85`), keeping the frame proportionate. When a wall is taller than standard height (`60`), a wall header (lintel) is drawn above standard doors and openings.
 
 For a local preview with simulated entities and view, height, opacity and state
 controls, see [the development preview](../docker/README.md#3d-development-preview).

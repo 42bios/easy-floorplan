@@ -44,7 +44,7 @@ quotes when saving while retaining the required quotes around `'y'`.
 | `appearance` | string | `normal` | `line-art` draws crisp outlines on white while keeping device states and actions live. See [Live appearance and view controls](appearance.md#live-appearance-and-view-controls). |
 | `showViewControls` | boolean | `false` (enabled for new plans) | Show 2D/3D, Normal/Line art, quarter-turn rotation and reset controls below the plan. Viewer choices stay local to this card. |
 | `showExport` | boolean | `false` | Offer an optional SVG download in the view controls, or an **Export SVG** button when those controls are hidden. Downloads static line art of the active floor in the current view and rotation. See [SVG export](appearance.md#svg-export). |
-| `wallHeight` | number | `60` | Standing wall height in canvas units, clamped to 0–400. Ignored in 2D. |
+| `wallHeight` | number | `60` | Standing wall height in canvas units, clamped to 0–400. Ignored in 2D. Can be overridden per wall via `height`. |
 | `wallOpacity` | number | `1` | Standing wall opacity, clamped to 0–1. Furniture and opening panels keep their own paint. Ignored in 2D. |
 | `showDeadSpaces` | boolean | `false` | Hatch every space the walls seal off that no door or window reaches, worked out from the walls and openings themselves. See [Dead spaces](behavior.md#dead-spaces). |
 | `sunDimming` | boolean | `false` | Dim through dusk, brighten through dawn, from the HA instance's sun. See [Follow the sun](lighting.md#follow-the-sun). |
@@ -62,7 +62,7 @@ quotes when saving while retaining the required quotes around `'y'`.
 | `moonlight` | boolean | `false` | Once the sun is down, let the moon in through the same openings: a cool light from the moon's real position, as bright as it is full. Needs `sunlight` following the real sun. See [Moonlight](lighting.md#moonlight). |
 | `cloudCoverEntity` | string | — | A `weather` entity (its `cloud_coverage`) or a cloud cover sensor in %. Cloud thins the sun patches to a quarter at full cover, keeping the shade, and ambient daylight to 70%; unreadable dims nothing. See [Clouds](lighting.md#clouds). |
 | `skin`       | string   | `default`          | Built-in look for the whole plan: `default`, `odnetnin`, `pastel` or `tron`. See [Skins](appearance.md#skins). |
-| `pressEffect`| string   | `scale`            | Feedback when a device is pressed: `scale`, `ripple`, `flash` or `none`. Only devices that actually do something respond. See [Press feedback](../README.md#press-feedback). |
+| `pressEffect`| string   | `scale`            | Feedback when a device is pressed: `scale`, `ripple`, `flash` or `none`. Only devices that actually do something respond. See [Press feedback](elements.md#press-feedback). |
 | `offlineStyle`| string  | `dim`              | How a device whose entity is **offline** is drawn: `dim`, `strike` (dimmed with a diagonal through the badge) or `none`. See [Offline devices](behavior.md#offline-devices). |
 | `compactHeader`| boolean | `false`           | Draw the title inside the plan and the floor buttons in a row, instead of spending a card header row on them. See [Compact header](appearance.md#compact-header). |
 | `overlayScale`| string  | `fixed`; `plan` in new plans | How badges, labels, room names and text are sized: `plan` = canvas units so they scale with the drawing, `fixed` = screen pixels. A card added from the picker is created with `plan`; a config that doesn't say renders `fixed`, which is what every plan drawn before the option existed was laid out in. See [Overlay scale](appearance.md#overlay-scale). |
@@ -71,6 +71,7 @@ quotes when saving while retaining the required quotes around `'y'`.
 | `roomFocus`  | boolean \| object | — | Walk the zoom from room to room. `true` adds previous/next controls and lets the arrow keys move between rooms — the only way to zoom a room without a pointer, since a room that merely zooms is not a tab stop. As an object: `controls` (default `true`), `interval` seconds to dwell on each room before moving on (2–600, omitted means it only moves when asked), and `rooms` naming the visiting order. Any tap or key press restarts the dwell. See [Moving between rooms](appearance.md#moving-between-rooms). |
 | `background` | string   | skin / card bg     | Canvas background color (CSS / hex). Overrides the skin's paper. |
 | `palette`    | Palette[]| —                  | Named colours for this plan, referenced from any colour field as `var(--fp-color-<name>)`. See [Named colors](appearance.md#named-colors). |
+| `roomTints`  | string   | `off`              | `auto` gives every room without its own `color` a soft tint, different from the rooms it shares a wall with and stable across reloads. See [Room tints](appearance.md#room-tints). |
 | `floors`     | Floor[]  | —                  | Per-floor element groups (see [Floor](#floor)).   |
 | `defaultFloor`| string  | first floor        | Id of the floor shown first.                 |
 | `floorSwitcher` | object | classic, automatic layout, top-right corner | Optional `style: default` or `buttons` (larger dashboard buttons); `layout: auto`, `horizontal` or `vertical`. Optional `x` and `y` place the centre in canvas units and follow `rotation`. Style and layout work without coordinates. See [Floor button appearance](appearance.md#floor-button-appearance) and [position](appearance.md#where-the-floor-switcher-sits). |
@@ -191,12 +192,18 @@ device still needs confirmation.
 
 ## Wall
 
-`{ id, x1, y1, x2, y2, thickness?, kind?, locked? }` — endpoints in virtual units.
+`{ id, x1, y1, x2, y2, thickness?, height?, kind?, locked? }` — endpoints in virtual units.
 
 **`thickness`** is the stroke width in virtual units, set per wall by the **Thickness**
 slider in the editor. It defaults to `8` and is capped at `10`: a doorway is cut through
 the wall layer with a mask sized off the shared default, not per wall, so a wall drawn
 wider than the cap would not be fully cleared by its own door or window.
+
+**`height`** is the standing wall height in canvas units (`0..400`) in 3D isometric view
+(`view: 3d` / `projection: iso`). When unset, the wall defaults to the card's overall
+`wallHeight` setting (default `60`). Openings (doors, windows, passages) placed along the
+wall automatically scale to match its height. Editor: **Height**. See
+[Wall height](appearance.md#wall-height).
 
 **`kind`** is `wall` (the default, never written) or `railing` — the low edge of a
 balcony, terrace or gallery. A railing is drawn at 40% of the wall weight, lamp light and
@@ -245,7 +252,7 @@ See [Skylights](lighting.md#skylights) for what the sun does with one and
 | `tap_action`  | ActionConfig                | Standard Lovelace action, acting on whichever entity `tapTarget` leads with (or on `shutterEntity` when it is the only one bound). By default an open/close `cover` toggles and everything else opens more-info. An action's own `entity` picks which of the two it acts on. |
 | `hold_action` / `double_tap_action` | ActionConfig | With both entities bound, hold opens the shutter's more-info by default — a tap is never retargeted at the shutter motor. Double-tap does nothing unless configured. |
 | `sliderStyle` | `single` \| `bypass` \| `biparting` \| `biparting-bypass` \| `converging` | With `motion: slide`: one panel (default), two stacking, two centre-parting into the walls, two centre-parting over a fixed panel at each jamb, or two running together to stack in the middle. |
-| `locked`      | boolean                     | Pinned in place in the editor: it still selects, edits and deletes, but never moves, and it yields the click to anything unlocked on top of it. The editor writes it; the rendered card ignores it. See [Locking elements in place](../README.md#locking-elements-in-place). |
+| `locked`      | boolean                     | Pinned in place in the editor: it still selects, edits and deletes, but never moves, and it yields the click to anything unlocked on top of it. The editor writes it; the rendered card ignores it. See [Locking elements in place](editor.md#locking-elements-in-place). |
 
 ## Item (device)
 
@@ -263,7 +270,7 @@ See [Skylights](lighting.md#skylights) for what the sun does with one and
 | `name`        | string                                 | friendly name| Label / tooltip override.                             |
 | `size`        | number                                 | `34`         | Icon badge diameter (px).                              |
 | `angle`       | number                                 | `0`          | Icon rotation (deg).                                   |
-| `display`     | `badge` \| `ripple` \| `iconRipple`    | `badge`      | How the device is drawn. The editor spells this as the **Ripple** toggle (plus **Badge shows: Nothing** for `ripple`) and offers it only on devices that detect something where they sit (see [Presence ripples](../README.md#presence-ripples)); in YAML it works on any entity. |
+| `display`     | `badge` \| `ripple` \| `iconRipple`    | `badge`      | How the device is drawn. The editor spells this as the **Ripple** toggle (plus **Badge shows: Nothing** for `ripple`) and offers it only on devices that detect something where they sit (see [Presence ripples](elements.md#presence-ripples)); in YAML it works on any entity. |
 | `iconAnimation` | `auto` \| `none` \| `spin` \| `pulse` | `auto`       | Animate the icon while active. `auto`: fan spins; media player / vacuum pulse. A `climate` entity animates only while its `hvac_action` says it is working — an AC holding `cool` at temperature keeps its colour but stops moving. The editor spells this as the icon options of **Badge shows**, showing `auto` as whatever it resolves to. |
 | `activeColor` | string                                 | theme color  | Badge color while on. Ignored while `stateColor` rules match. |
 | `inactiveColor` | string                               | theme badge  | Badge color while **off** — closed, locked or docked, whichever this entity's domain says. Ignored while `stateColor` rules match, and while the entity is [offline](behavior.md#offline-devices). See [Colors for on and off](behavior.md#colors-for-on-and-off). |
@@ -274,6 +281,9 @@ See [Skylights](lighting.md#skylights) for what the sun does with one and
 | `glow`        | boolean                                | `false`      | Cast a pool of light onto the plan (lights only). See [Cast light](#cast-light). |
 | `glowRadius`  | number                                 | `140`        | Radius of the cast pool at full brightness, in canvas units. A dimmer lamp casts a proportionally smaller pool, down to half this. |
 | `glowColor`   | string                                 | `#ffd9a0`    | Pool color for a bulb that can't report one; color-capable lights use their own. |
+| `stripLength` | number                                 | —            | Cast the light along a run this long, centred on the device, instead of from a point — an LED strip. Under `4` (or unset) is an ordinary point lamp. Only read with `glow`. See [LED strips](#led-strips). |
+| `stripAngle`  | number                                 | `0`          | Direction of the strip in degrees, measured on the plan: `0` runs to the right, `90` straight down. |
+| `stripSide`   | `both` \| `left` \| `right`            | `both`       | Which side of the strip it lights, as seen walking from its first end to its second. `left`/`right` for a strip on a wall, so it lights one room and not both. |
 | `badgeContent` | `icon` \| `value` \| `none`           | `icon`       | What the badge holds. `value` draws the reading inside it, falling back to the icon when there is no number; `none` leaves the label alone. |
 | `badgeEntity` | `primary` \| number                    | automatic    | Which reading a `value` badge shows: the device's own entity, or an index into `readings`. Unset picks the first with a number; set, only that one is read (an index past the end shows the icon). `secondary` is accepted as the legacy spelling of `0`. |
 | `showIcon`    | boolean                                | `true`       | **Deprecated** — use `badgeContent`. Honoured only when it is unset (`false` = `none`). |
@@ -287,8 +297,14 @@ See [Skylights](lighting.md#skylights) for what the sun does with one and
 | `labelSize`   | number                                 | `12`         | Label line font size (px).                             |
 | `tap_action`  | ActionConfig                           | per domain   | Standard Lovelace action. By default `light`, `switch`, `fan` and `input_boolean` toggle and everything else — covers included — opens more-info. |
 | `hold_action` / `double_tap_action` | ActionConfig         | —            | Optional extra gestures.                               |
-| `locked`      | boolean                                | `false`      | Pinned in place in the editor: it still selects, edits and deletes, but never moves, and it yields the click to anything unlocked on top of it. The editor writes it; the rendered card ignores it. See [Locking elements in place](../README.md#locking-elements-in-place). |
+| `locked`      | boolean                                | `false`      | Pinned in place in the editor: it still selects, edits and deletes, but never moves, and it yields the click to anything unlocked on top of it. The editor writes it; the rendered card ignores it. See [Locking elements in place](editor.md#locking-elements-in-place). |
 | `hide*` / `hideBadge*` / `hideState*` | — | — | Twenty-four keys that hide the device, its badge or its label from a second entity's state. Documented in full under [Advanced Hiding Logic](behavior.md#advanced-hiding-logic); the editor groups them under **Visibility**. |
+
+A light's `brightness` reading uses a rounded percentage in a value badge,
+matching the label (`128` becomes `50%`). An explicitly selected brightness
+reading falls back to the icon when absent or null. Automatic selection may
+choose another numeric reading. A `brightness` attribute from another entity
+domain stays raw.
 
 ### Cast light
 
@@ -296,6 +312,8 @@ Set `glow: true` on a light and it pools its own color and brightness onto the p
 centered where the device sits — not across the whole room. Several lights in one room
 each cast their own pool, and overlapping pools **mix additively**: a warm lamp and a cool
 one blend to a neutral tone between them, the way they would in the room.
+
+<img width="195" height="278" alt="Overlapping pools of colored light blending on a floorplan" src="https://github.com/user-attachments/assets/23104587-687b-4c9a-83e8-e83c3d5eb6eb" />
 
 ```yaml
 items:
@@ -348,6 +366,47 @@ Pools are drawn above room fills but below furniture and walls, so light reads a
 the floor. Furniture under a lit lamp picks up about half the cast, enough to read as lit
 without turning into the color of the light. Pools never intercept clicks.
 
+### LED strips
+
+A strip is a light with a length. Give a cast-light device a `stripLength` and the light
+runs along a line centred on the device instead of pooling from its point — the same
+colour, brightness, state rules and actions as any other light, because it *is* one.
+
+```yaml
+items:
+  - id: kitchen_strip
+    entity: light.kitchen_led_strip
+    kind: light
+    'x': 300
+    'y': 100
+    glow: true
+    glowRadius: 90       # how far the light reaches from the strip
+    stripLength: 400     # the run, centred on x/y
+    stripAngle: 0        # along the plan's x axis
+    stripSide: right     # lights the room below the top wall, not the one above
+```
+
+The glow fades across the strip the way a lamp's fades from its centre, with rounded
+ends, so the run reads as one light rather than a row of beads. Walls stop it exactly as
+they stop a lamp, and the night clears along the run when [sun dimming](lighting.md#lit-rooms-hold-back-the-night)
+is on. The strip itself is drawn as a thin line — in the light's colour while it is on,
+dashed while it is off — so it never reads as a wall.
+
+A strip mounted on a wall should light only its own room: set `stripSide` to the side the
+room is on. `left` and `right` are as seen walking the strip from its first end (behind
+the device, against `stripAngle`) to its second. `both` is for a strip in free space,
+under a cabinet or along a shelf. A one-sided strip is drawn just in front of its wall on
+the lit side, so the line itself shows which room it lights.
+
+In the editor, turn on **LED strip** under the device's Cast light settings. Its two ends
+get handles on the plan, which drag and snap the way a wall's ends do; the device's icon
+still moves the whole strip. Drag both ends onto one wall and, while **Lit side** is on
+**Auto**, the strip lights the side it came from — the room you were laying it out in.
+Choosing **Both sides** keeps it lit on both, wherever it is dragged. An L-shaped run is two strips bound to the same light.
+
+In the 3D view the strip lies on the floor with its pool, so a standing wall that hides
+that bit of floor hides the strip too.
+
 ## Text
 
 `{ id, x, y, text, entity?, attribute?, size?, color?, angle?, locked? }` — `size` px (default 16),
@@ -374,7 +433,7 @@ there reads `—`, the same as a device's label.
 
 ## Furniture
 
-`{ id, type, x, y, w, h, angle?, hand?, color?, entity?, activeColor?, stateColor?, goToFloor?, tap_action?, hold_action?, double_tap_action?, locked? }`
+`{ id, type, x, y, w, h, angle?, hand?, color?, entity?, activeColor?, stateColor?, goToFloor?, tap_action?, hold_action?, double_tap_action?, showIcon?, locked? }`
 
 `type` names a **symbol** — one of the built-in symbols (`table`, `sofa`, `bed`,
 `fridge`, `stairs`, …; the full set is [`furniture/`](../furniture), a file each), or one you
@@ -401,6 +460,10 @@ has (same shape as a device's). `goToFloor` is to furniture what the zoom is to 
 a tap does when nothing else is set, so setting `tap_action` replaces it while hold and
 double-tap stay free. An action with no `entity` of its own uses the piece's. See
 [Actions on furniture](behavior.md#actions-on-furniture).
+
+**`showIcon: false`** hides the round action icon on a piece with an action or a floor
+destination. Tapping the drawing itself then runs it, instead of passing through to the
+room. Default `true`.
 
 ```yaml
 { id: plant1, type: plant, 'x': 300, 'y': 220, w: 40, h: 40,
@@ -470,7 +533,8 @@ animated inside a rectangular tracked area:
   ones beside them. Left unset on a `fixed` card the size stays in the stylesheet, so a
   card-mod rule on `.area-label` still wins; set it, or switch to `plan`, and it moves
   inline and takes over.
-- `color` / `opacity` — the room's fill; theme primary and `0.25` by default.
+- `color` / `opacity` — the room's fill; theme primary and `0.25` by default, or a soft
+  tint under [`roomTints: auto`](appearance.md#room-tints).
 - `haArea` — id of a linked Home Assistant area, set by the editor when `name` matches one.
 - `sideWalls` — rectangle-room edge overrides: keys `top`, `right`, `bottom`, `left` and
   values `wall`, `divider` or `none`. Double-click a room edge in the editor to cycle it;
