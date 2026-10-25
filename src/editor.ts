@@ -6,6 +6,7 @@ import { repeat } from "lit/directives/repeat.js";
 import { keyed } from "lit/directives/keyed.js";
 import { validateYCoordinates } from "./config-coordinates";
 import { floorSwitcherClasses, floorSwitcherStyles } from "./floor-switcher";
+import { floorSummaryShown } from "./floor-summary";
 import type {
   HomeAssistant,
   FloorplanCardConfig,
@@ -73,6 +74,8 @@ import {
   renderOpening,
   renderWallMask,
   imageFitRatio,
+  floorImage,
+  hassDarkMode,
   editorGlowPaint,
   renderGlow,
   renderStripLine,
@@ -148,12 +151,15 @@ import {
   normalizeOverlayScale,
   normalizeOverlayMinWidth,
   overlayLength,
+  wallThickness,
   polygonCentroid,
   pointInPolygon,
 } from "./render";
+import { autoLabelKey, measureLabelScene, rectToBox, type LabelSide } from "./label-placement";
 import { deadSpacesCached } from "./dead-space";
 import { cssColor, cssColorOr, cssNumber, contrastText } from "./css-safe";
 import { skinStyle, skinTokens, SKIN_ACCENT, SKIN_PAPER, SKIN_TEXT, SKIN_WALL } from "./skins";
+import { roomTintPaints, roomTintScheme, roomTintsOf, type RoomTintPaint } from "./room-tints";
 import {
   paletteStyle,
   paletteKey,
@@ -213,6 +219,8 @@ import {
   furnitureForm,
   isLiveField,
   formSlice,
+  actionFieldNames,
+  actionYamlPatch,
   itemEntityForm,
   itemIdentityForm,
   itemShowStateForm,
@@ -229,6 +237,7 @@ import {
   projectPressForm,
   projectReplayForm,
   projectSkinForm,
+  projectRoomTintsForm,
   projectSunForm,
   projectReliefForm,
   textForm,
@@ -514,6 +523,20 @@ export class FloorplanCardEditor extends LitElement {
   @state() private _projectOpen = false;
   @state() private _selectionPage = "properties";
   @state() private _projectPage = "plan";
+  /**
+   * Behavior's actions as YAML rather than dropdowns (issue #314). One switch
+   * for every element, as HA's own is per editor: whoever needs YAML for one
+   * badge's tap usually needs it for the next.
+   */
+  @state() private _actionYaml = false;
+  /** Why the last code edit was not applied; cleared by the next good one. */
+  @state() private _actionYamlError = "";
+  /**
+   * `ha-yaml-editor` reads its value once, so the editor is re-keyed when the
+   * actions change from outside it (another element, undo) — but not when the
+   * change is its own echo, which would throw the cursor away mid-word.
+   */
+  private _actionYamlSeen = { key: "", json: "", gen: 0 };
   @state() private _mobileInspector = false;
   @state() private _previewCollapsed = false;
   @state() private _keyboardOpen = false;
@@ -586,6 +609,20 @@ export class FloorplanCardEditor extends LitElement {
    * shows. A dense plan is much easier to aim at without them.
    */
   @state() private _hideLabels = false;
+  /**
+   * `labelPosition: auto` on the canvas: the side each auto label was given
+   * here. The editor runs the card's own chooser over its own canvas
+   * (label-placement.ts) rather than asking the card, so it is an
+   * approximation of the card's choice, not a copy of it: the canvas draws no
+   * room names, it is never rotated or projected, label-only devices keep a
+   * ghost badge, and a device with no card label is measured by its dim
+   * stand-in. On a plain 2D plan it lands on the same side.
+   */
+  private _autoSides = new Map<string, LabelSide>();
+  private _autoLabelSig: string[] = [];
+  private _autoLayoutKey?: string;
+  private _autoLayoutConfig?: unknown;
+  private _autoLayoutSerial = 0;
   /** Live touch points on the canvas wrap, for pinch-zoom (issue #38). */
   private _pinchPts = new Map<number, { x: number; y: number }>();
   /** Pinch baseline: finger distance, zoom, and centroid (content coords) at pinch start. */
@@ -769,10 +806,68 @@ export class FloorplanCardEditor extends LitElement {
     // The HA-floor link select reads the floor registry.
     const floorsOf = (h: HomeAssistant) => (h as { floors?: unknown }).floors;
     if (floorsOf(prev) !== floorsOf(this.hass)) return true;
+    // The canvas image follows light/dark mode (issue #366).
+    if (hassDarkMode(prev) !== hassDarkMode(this.hass)) return true;
     return hassRenderInputsChanged(prev, this.hass, this._watchedEntities);
   }
 
   // ---- active floor access -----------------------------------------------
+
+  /**
+   * Place the canvas's `labelPosition: auto` labels, as the card does (see its
+   * `_syncAutoLabels`): only when the config, floor, zoom or a label's length
+   * changed, reads first and one more render if a side moved.
+   */
+  private _syncAutoLabels(): void {
+    if (this._hideLabels || !this._autoLabelSig.length || !this._config) return;
+    if (this._config !== this._autoLayoutConfig) {
+      this._autoLayoutConfig = this._config;
+      this._autoLayoutSerial++;
+    }
+    const key = `${this._autoLayoutSerial}|${this._activeFloorId}|${this._zoom}|${this._autoLabelSig.join(",")}`;
+    if (key === this._autoLayoutKey) return;
+    const stage = this.renderRoot.querySelector<HTMLElement>(".stage");
+    const overlay = stage?.querySelector<HTMLElement>(":scope > .items");
+    if (!stage || !overlay) return;
+    const r = overlay.getBoundingClientRect();
+    if (!(r.width > 0 && r.height > 0)) return;
+    this._autoLayoutKey = key;
+    const c = this._config;
+    const floor = this._floor();
+    const sx = r.width / cssNumber(c.width, DEFAULT_WIDTH);
+    const sy = r.height / cssNumber(c.height, DEFAULT_HEIGHT);
+    const generated = floor.areas.flatMap((a) => rectAreaSideWalls(a.id, a.points, a.sideWalls ?? {}));
+    const walls = [...floor.walls, ...generated].map((w) => ({
+      x1: r.left + w.x1 * sx,
+      y1: r.top + w.y1 * sy,
+      x2: r.left + w.x2 * sx,
+      y2: r.top + w.y2 * sy,
+      half: (wallThickness(w.thickness) * sx) / 2,
+    }));
+    const sides = measureLabelScene({
+      items: [...overlay.querySelectorAll<HTMLElement>(":scope > .edit-item")],
+      autoKey: (el) => el.dataset.labelAuto,
+      solid: (el) => el.querySelector(":scope > .badge, :scope > .stack .badge"),
+      label: (el) => el.querySelector<HTMLElement>(":scope > .ilabel"),
+      current: this._autoSides,
+      marks: [...overlay.querySelectorAll(":scope > .shutter-mark")],
+      names: [...overlay.querySelectorAll(":scope > .edit-text")],
+      openings: [...stage.querySelectorAll("svg .fp-opening:not(.fp-opening-skylight)")],
+      walls,
+      bounds: rectToBox(stage.getBoundingClientRect()),
+      scalePlan: stage.classList.contains("scale-plan"),
+    });
+    // Forget the sides of labels no longer on the canvas.
+    for (const k of [...this._autoSides.keys()]) if (!sides.has(k)) this._autoSides.delete(k);
+    let changed = false;
+    for (const [k, side] of sides) {
+      if (this._autoSides.get(k) !== side) {
+        this._autoSides.set(k, side);
+        changed = true;
+      }
+    }
+    if (changed) this.requestUpdate();
+  }
 
   private _floor(): Floor {
     const floors = this._config.floors ?? [];
@@ -837,6 +932,9 @@ export class FloorplanCardEditor extends LitElement {
         const selectionPreview = this._mobileInspector && !this._projectOpen && this._primary()
           && side && this._canvasWrap && side.getBoundingClientRect().top >= this._canvasWrap.getBoundingClientRect().bottom;
         if (this._fitToViewport && this._gesturePointer === null && !selectionPreview) this._fitView();
+        // The canvas changed size: auto labels measure again.
+        this._autoLayoutKey = undefined;
+        void this.updateComplete.then(() => this._syncAutoLabels());
         void this.updateComplete.then(() => this._keepSelectionInPreview());
       });
       this._canvasResize.observe(this._canvasWrap);
@@ -968,6 +1066,7 @@ export class FloorplanCardEditor extends LitElement {
    * fallback, which is already correct on the mobile dialog (transform: none).
    */
   protected updated(): void {
+    this._syncAutoLabels();
     // Re-asserted on every render while fullscreen (not just the transition):
     // idempotent via :popover-open, and it self-heals if the browser
     // force-hid the popover, e.g. across a disconnect/reconnect.
@@ -3080,13 +3179,14 @@ export class FloorplanCardEditor extends LitElement {
     // What it is, and how it is drawn.
     // `width` and `ceilingHeight` are the skylight's two; `openingForm` only
     // offers them for one, so they cost every other opening nothing but a
-    // name in this list.
+    // name in this list. `sill` is the same for a window.
     ["Shape", [
       "type",
       "motion",
       "length",
       "width",
       "ceilingHeight",
+      "sill",
       "sash",
       "sashSpan",
       "hinge",
@@ -3124,7 +3224,7 @@ export class FloorplanCardEditor extends LitElement {
     ["Shape", ["type", "hand", "w", "h", "angle"]],
     ["What it reads", ["entity"]],
     // What clicking it does — a staircase that changes floor (issue #121).
-    ["Behavior", ["goToFloor", "tap_action", "hold_action", "double_tap_action"]],
+    ["Behavior", ["goToFloor", "tap_action", "hold_action", "double_tap_action", "showIcon"]],
   ] as const;
 
   private static readonly TRACKER_GROUPS = [
@@ -3142,8 +3242,13 @@ export class FloorplanCardEditor extends LitElement {
       Look: "Plan style", Project: "Canvas", Display: "View & scale", Color: "State colors",
       "Floor image": `Background · ${this._floor().name}`,
     } as Record<string, string>)[title] ?? title;
+    const codeSwitch = title === "Behavior" && customElements.get("ha-yaml-editor")
+      ? html`<button type="button" class="cfg-group-mode" aria-pressed=${this._actionYaml}
+          @click=${() => { this._actionYaml = !this._actionYaml; this._actionYamlError = ""; }}
+        >${this._actionYaml ? "Show visual editor" : "Show code editor"}</button>`
+      : nothing;
     return html`<section class="cfg-group" data-group=${title}>
-      <h3 class="cfg-group-title">${label}</h3>${content}
+      <div class="cfg-group-head"><h3 class="cfg-group-title">${label}</h3>${codeSwitch}</div>${content}
     </section>`;
   }
 
@@ -3980,6 +4085,11 @@ export class FloorplanCardEditor extends LitElement {
     if (!this._config) return html`${nothing}`;
     const c = this._config;
     const floor = this._floor();
+    // The canvas follows HA's light/dark mode too, so what you trace over is
+    // what the card will show (issue #366).
+    const bgImage = floorImage(floor, hassDarkMode(this.hass));
+    // Refilled by _renderItemOverlay: what the auto labels on show say.
+    this._autoLabelSig = [];
     const floors = c.floors ?? [];
     const generatedWallSegments = this._roomWallSegments(floor);
     const blockingWallSegments = wallsThatBlock([...floor.walls, ...generatedWallSegments]);
@@ -4006,6 +4116,13 @@ export class FloorplanCardEditor extends LitElement {
     const deadSpaceRings = c.showDeadSpaces
       ? deadSpacesCached(blockingWallSegments, floor.openings)
       : [];
+    // Automatic room tints, as the card draws them — the editor previews the
+    // resting look, so a room picks up its tint the moment it is drawn.
+    const roomTints = roomTintPaints(
+      floor.areas ?? [],
+      roomTintsOf(c),
+      roomTintScheme(this.hass, c.skin)
+    );
     // Walls as light meets them (issue #143), same as the card — so dropping a
     // door into a wall spills the pool through it while you are still drawing.
     // Skipped entirely on a floor with no cast light, which is most of them:
@@ -4275,6 +4392,75 @@ export class FloorplanCardEditor extends LitElement {
                         })}
                     />
                   </div>
+                  <!-- Floor Summary Settings (issue #234) -->
+                  ${(() => {
+                    const summaryEnabled = floor
+                      ? floorSummaryShown(floor, this._config.floorSummary)
+                      : false;
+                    return html`
+                      <div class="pop-row" style="margin-top: 6px;">
+                        <label>Summary enabled</label>
+                        <input
+                          type="checkbox"
+                          title="Show aggregate summary on switcher button"
+                          .checked=${summaryEnabled}
+                          @change=${(e: Event) =>
+                            this._commitFloor({
+                              summary: {
+                                ...floor?.summary,
+                                enabled: (e.target as HTMLInputElement).checked,
+                              },
+                            })}
+                        />
+                      </div>
+                      ${summaryEnabled
+                        ? html`
+                            <div class="pop-row">
+                              <label>Temp helper</label>
+                              ${this._renderEntityPicker(
+                                floor?.summary?.temperatureEntity ?? "",
+                                (entity) =>
+                                  this._commitFloor({
+                                    summary: {
+                                      ...floor?.summary,
+                                      temperatureEntity: entity || undefined,
+                                    },
+                                  }),
+                                ["sensor", "climate"]
+                              )}
+                            </div>
+                            <div class="pop-row">
+                              <label>Humidity helper</label>
+                              ${this._renderEntityPicker(
+                                floor?.summary?.humidityEntity ?? "",
+                                (entity) =>
+                                  this._commitFloor({
+                                    summary: {
+                                      ...floor?.summary,
+                                      humidityEntity: entity || undefined,
+                                    },
+                                  }),
+                                ["sensor", "climate"]
+                              )}
+                            </div>
+                            <div class="pop-row">
+                              <label>Presence helper</label>
+                              ${this._renderEntityPicker(
+                                floor?.summary?.presenceEntity ?? "",
+                                (entity) =>
+                                  this._commitFloor({
+                                    summary: {
+                                      ...floor?.summary,
+                                      presenceEntity: entity || undefined,
+                                    },
+                                  }),
+                                ["binary_sensor", "input_boolean", "person", "device_tracker"]
+                              )}
+                            </div>
+                          `
+                        : nothing}
+                    `;
+                  })()}
                   <button
                     class="danger pop-action"
                     ?disabled=${floors.length <= 1}
@@ -4361,16 +4547,17 @@ export class FloorplanCardEditor extends LitElement {
                 height=${c.height}
                 fill=${c.background ?? SKIN_PAPER}
               />
-              ${floor.image
-                ? svg`<image href=${floor.image} x="0" y="0" width=${c.width} height=${c.height}
+              ${bgImage
+                ? svg`<image href=${bgImage.href} x="0" y="0" width=${c.width} height=${c.height}
                             preserveAspectRatio=${imageFitRatio(floor.imageFit)}
-                            opacity=${floor.imageOpacity ?? 1} />`
+                            opacity=${floor.imageOpacity ?? 1}
+                            style=${bgImage.filter ? `filter: ${bgImage.filter}` : nothing} />`
                 : nothing}
               ${this._renderGrid()}
               ${repeat(
                 floor.areas ?? [],
                 (a, i) => a.id || i,
-                (a) => this._renderAreaSel(a, scopingAreaId)
+                (a, i) => this._renderAreaSel(a, scopingAreaId, roomTints[i])
               )}
               ${repeat(
                 floor.roofs ?? [],
@@ -4493,7 +4680,9 @@ export class FloorplanCardEditor extends LitElement {
             </svg>`
             )}
             <div class="items">
-              ${(c.floors ?? []).length > 1 ? this._renderSwitcherHandle(c) : nothing}
+              ${(c.floors ?? []).length > 1 || (c.floors ?? []).some((f) => floorSummaryShown(f, c.floorSummary))
+                ? this._renderSwitcherHandle(c)
+                : nothing}
               ${floor.texts.map((t) => this._renderTextOverlay(t, c, overlay))}
               ${floor.openings
                 .filter((o) => hasShutterMark(o))
@@ -4574,6 +4763,14 @@ export class FloorplanCardEditor extends LitElement {
     spec: FormSpec,
     apply: (patch: Record<string, unknown>, live: boolean) => void
   ): TemplateResult {
+    const actionNames = this._actionYaml && customElements.get("ha-yaml-editor") ? actionFieldNames(spec) : [];
+    if (actionNames.length) {
+      // `moreInfoEntity` is the dropdown's stand-in for `tap_action.entity`,
+      // which the YAML holds itself; showing both would let them disagree.
+      const rest = spec.fields.filter((f) => !actionNames.includes(f.name) && f.name !== "moreInfoEntity");
+      return html`${rest.length ? this._renderForm({ ...spec, fields: rest }, apply) : nothing}
+        ${this._renderActionYaml(spec, actionNames, apply)}`;
+    }
     if (customElements.get("ha-form")) {
       const draft = this._numberDraft;
       const data = draft?.form.isConnected && spec.fields.some((field) => field.name === draft.name)
@@ -4619,6 +4816,52 @@ export class FloorplanCardEditor extends LitElement {
       ${spec.fields.some((field) => "ui_action" in field.selector)
         ? html`<p class="hint action-editor-note">Edit tap, hold and double-tap actions in the Home Assistant editor.</p>`
         : nothing}`;
+  }
+
+  /** The Behavior group's actions in HA's own YAML editor (issue #314). */
+  private _renderActionYaml(
+    spec: FormSpec,
+    names: string[],
+    apply: (patch: Record<string, unknown>, live: boolean) => void
+  ): TemplateResult {
+    const value: Record<string, unknown> = {};
+    for (const name of names) if (spec.data[name] != null) value[name] = spec.data[name];
+    const primary = this._primary();
+    const key = primary ? `${primary.kind}:${primary.id}` : "";
+    const json = JSON.stringify(value);
+    const seen = this._actionYamlSeen;
+    if (seen.key !== key || seen.json !== json) {
+      this._actionYamlSeen = { key, json, gen: seen.gen + 1 };
+      // A refused edit's message belongs to the YAML it was about; a new
+      // element (or an undo) brings fresh YAML, so drop it.
+      if (this._actionYamlError) this._actionYamlError = "";
+    }
+    return html`<div class="action-yaml">
+      ${keyed(this._actionYamlSeen.gen, html`<ha-yaml-editor
+        .hass=${this.hass}
+        .defaultValue=${value}
+        @value-changed=${(ev: CustomEvent<{ value: unknown; isValid?: boolean }>) => {
+          ev.stopPropagation();
+          if (ev.detail.isValid === false) return;
+          const result = actionYamlPatch(ev.detail.value, names);
+          if ("error" in result) {
+            this._actionYamlError = result.error;
+            return;
+          }
+          this._actionYamlError = "";
+          const next: Record<string, unknown> = {};
+          for (const name of names) if (result.patch[name] !== undefined) next[name] = result.patch[name];
+          const nextJson = JSON.stringify(next);
+          if (nextJson === this._actionYamlSeen.json) return;
+          this._actionYamlSeen = { ...this._actionYamlSeen, json: nextJson };
+          // Live, like typing in a field: one undo step per burst of edits.
+          apply(spec.toPatch(result.patch), true);
+        }}
+      ></ha-yaml-editor>`)}
+      ${this._actionYamlError
+        ? html`<p class="hint action-yaml-error" role="alert">${this._actionYamlError}</p>`
+        : nothing}
+    </div>`;
   }
 
   private _renderEssentialForm(
@@ -5437,7 +5680,7 @@ export class FloorplanCardEditor extends LitElement {
     this._updateArea(a.id, { sideWalls: Object.keys(sideWalls).length ? sideWalls : undefined });
   }
 
-  private _renderAreaSel(a: Area, scopingId?: string): TemplateResult {
+  private _renderAreaSel(a: Area, scopingId?: string, tint?: RoomTintPaint): TemplateResult {
     const selected = this._isSel("area", a.id);
     const scoping = a.id === scopingId;
     const pts = a.points.map((p) => `${p.x},${p.y}`).join(" ");
@@ -5448,7 +5691,7 @@ export class FloorplanCardEditor extends LitElement {
     return svg`
       <g class="area-hit ${selected ? "selected" : ""} ${scoping ? "scoping" : ""}">
         ${scoping ? svg`<polygon points=${pts} class="area-scoping" />` : nothing}
-        ${renderArea(a)}
+        ${renderArea(a, undefined, tint)}
         <polygon points=${pts} class="area-hit-shape"
                  @pointerdown=${(e: PointerEvent) => this._startDrag(e, { kind: "area", id: a.id })} />
         ${selected ? svg`<polygon points=${pts} class="area-outline" />` : nothing}
@@ -5771,9 +6014,17 @@ export class FloorplanCardEditor extends LitElement {
     // #55). The editor must still show them — dimmed — or they could never be
     // found and edited again.
     const hiddenOnCard = itemHiddenWhenInactive(it, st?.state, this.hass);
+    // An auto label shows the side this canvas measured for it (see
+    // _syncAutoLabels), `below` until it has been measured.
+    const position = labelPositionOf(it);
+    const autoKey = position === "auto" ? autoLabelKey(it) : undefined;
+    const labelSide: LabelSide =
+      autoKey === undefined ? (position as LabelSide) : this._autoSides.get(autoKey) ?? "below";
+    if (autoKey !== undefined && !this._hideLabels) this._autoLabelSig.push(`${autoKey}:${label.length}`);
     return html`
       <div
         class="edit-item ${selected ? "selected" : ""} ${hiddenOnCard ? "card-hidden" : ""}"
+        data-label-auto=${autoKey ?? nothing}
         style="left:${(it.x / c.width) * 100}%; top:${(it.y / c.height) * 100}%;"
         @pointerdown=${(e: PointerEvent) => this._onOverlayDown(e, { kind: "item", id: it.id })}
         @pointermove=${this._onOverlayMove}
@@ -5789,7 +6040,7 @@ export class FloorplanCardEditor extends LitElement {
         ${this._hideLabels
         ? nothing
         : html`<span
-            class="ilabel ${cardLabel ? "live" : ""} ilabel-${labelPositionOf(it)}"
+            class="ilabel ${cardLabel ? "live" : ""} ilabel-${labelSide}"
             style="font-size:${overlayLength(
               cardLabel || it.labelSize != null ? itemLabelSize(it.labelSize) : 11,
               scale
@@ -6087,6 +6338,7 @@ export class FloorplanCardEditor extends LitElement {
             onLive: (background) => this._patchConfigLive({ background }),
             onCommit: (background) => this._patchConfig({ background }),
           }),
+          this._renderForm(projectRoomTintsForm(c), patch),
           this._renderForm(projectDeadSpaceForm(c), patch)
         )}
         ${this._renderGroup(
@@ -6416,7 +6668,7 @@ export class FloorplanCardEditor extends LitElement {
     return html`
       <!-- Appearance only matters once there is a switcher to see; a
            one-floor plan would store a choice with no visible result. -->
-      ${floors.length > 1
+      ${floors.length > 1 || floors.some((f) => floorSummaryShown(f, this._config.floorSummary))
         ? html`
           <div class="row">
             <label for="floor-switcher-style">Style</label>
@@ -6442,7 +6694,7 @@ export class FloorplanCardEditor extends LitElement {
         : nothing}
       <div class="row col">
         <label>Position</label>
-        ${floors.length > 1
+        ${floors.length > 1 || floors.some((f) => floorSummaryShown(f, this._config.floorSummary))
           ? html`<span class="hint"
                 >${at
                   ? "Drag it on the canvas, or type the point here."
@@ -6496,7 +6748,7 @@ export class FloorplanCardEditor extends LitElement {
                   </div>`
                 : nothing}`
           : html`<span class="hint"
-              >A plan with one floor draws no switcher. Add a second floor and it appears
+              >A plan with one floor draws no switcher unless floor summary is enabled. Add a second floor or enable floor summary and it appears
               here.</span
             >`}
       </div>
@@ -7948,6 +8200,10 @@ export class FloorplanCardEditor extends LitElement {
     .stage.scale-plan .ilabel-right {
       left: calc(100% + 0.33em);
     }
+    .stage.scale-plan .ilabel-above {
+      top: auto;
+      bottom: calc(100% + 0.17em);
+    }
     /* Preview of the card's shutter badge. Inherits .items' pointer-events:
        none — the opening underneath stays clickable for selection and drag. */
     .shutter-mark {
@@ -8437,6 +8693,10 @@ export class FloorplanCardEditor extends LitElement {
     }
     .ilabel-right {
       left: calc(100% + 4px);
+    }
+    .ilabel-above {
+      top: auto;
+      bottom: calc(100% + 2px);
     }
     /* The card's own label line, drawn as the card draws it (issue #135):
        full-strength ink, and no width clamp — the card has none, and clipping
