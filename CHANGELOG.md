@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Awnings and curtains (#196): an `awning` or `curtain` bound to a `cover` is drawn at
+  the cover's position, with `w × h` as its fully extended size. A curtain gathers at
+  the end `hand` picks, or at both ends with `hand: center`. Symbols can opt in with
+  the new `extend` and `elevation` keys. See [Furniture](docs/configuration.md#furniture).
 - Furniture action icons can be hidden per piece (`showIcon: false`, or **Action icon**
   under Behavior); the drawing itself then takes the tap. The icons also follow
   `overlayScale: plan` now, shrinking with the drawing like device badges instead of
