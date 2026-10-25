@@ -148,7 +148,8 @@ export const editorWorkspaceStyles = css`
   .edit-head .edit-title { font-size: 14px; white-space: normal; line-height: 1.4; }
   .selection-symbol { position: static; display: block; width: 28px; height: 32px; color: var(--editor-ink); }
   .edit-head button { min-height: 30px; padding: 5px; justify-content: center; border-color: transparent; }
-  .cfg-group { width: 100%; margin: 0; padding: 16px 0 0; border: 0; }
+  /* Contain HA floating-label z-indices below the sticky inspector navigation. */
+  .cfg-group { isolation: isolate; width: 100%; margin: 0; padding: 16px 0 0; border: 0; }
   .cfg-group + .cfg-group { border-top: 1px solid var(--editor-line); margin-top: 12px; }
   .cfg-group-title { min-height: 0; margin: 0; padding: 0; font-size: 14px; font-weight: 600; letter-spacing: 0; color: var(--editor-ink); }
   .cfg-group-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 28px; margin: 0 0 14px; }
