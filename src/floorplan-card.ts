@@ -1197,7 +1197,7 @@ export class FloorplanCard extends LitElement {
         });
         const mappedOpenings = lvlOpenings.map((o) => {
           const p = map(o.x, o.y);
-          return { x: p.x, y: p.y, length: o.length, angle: o.angle + rot, type: o.type };
+          return { x: p.x, y: p.y, length: o.length, angle: o.angle + rot, type: o.type, sill: o.sill };
         });
 
         const wSolids = wallSolids(mappedWalls, mappedOpenings, outdoorWallHeight, false, true);
@@ -1229,7 +1229,7 @@ export class FloorplanCard extends LitElement {
       const ownOpenings = active.openings;
       const mappedOwnOpenings = ownOpenings.map((o) => {
         const p = map(o.x, o.y);
-        return { x: p.x, y: p.y, length: o.length, angle: o.angle + rot, type: o.type };
+        return { x: p.x, y: p.y, length: o.length, angle: o.angle + rot, type: o.type, sill: o.sill };
       });
       solids.push(...wallSolids(mappedOwnWalls, mappedOwnOpenings, outdoorWallHeight, false, true));
       for (const o of ownOpenings) {
@@ -1272,7 +1272,7 @@ export class FloorplanCard extends LitElement {
       });
       const openings = effectiveOpenings.map((o) => {
         const p = map(o.x, o.y);
-        return { x: p.x, y: p.y, length: o.length, angle: o.angle + rot, type: o.type };
+        return { x: p.x, y: p.y, length: o.length, angle: o.angle + rot, type: o.type, sill: o.sill };
       });
       solids.push(...wallSolids(walls, openings, baseWallHeight, false));
       for (const o of effectiveOpenings) {
