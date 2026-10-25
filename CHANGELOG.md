@@ -7,7 +7,10 @@
   `overlayScale: plan` now, shrinking with the drawing like device badges instead of
   staying 34px on a narrow card (#362). On existing `plan` dashboards the icons will
   look smaller than before; that is intended. `fixed` keeps them at 34px.
-
+- Device labels gain `labelPosition: above`, and `auto` picks the clearest side
+  once the plan is laid out, keeping clear of walls, openings, badges and other
+  labels (#379). It measures only when the plan, floor, rotation, zoom, card size
+  or a label's length changes; the 3D view keeps auto labels below.
 - Animate live 3D quarter-turns around the floorplan, keeping labels, devices
   and room focus aligned. Repeated clicks can continue or reverse a turn; reset
   cancels it, and reduced motion keeps turns immediate (#354).
