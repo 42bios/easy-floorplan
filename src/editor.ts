@@ -82,6 +82,8 @@ import {
   stripFromEnds,
   stripOutline,
   stripRun,
+  spotCone,
+  conePoints,
   resolveOpeningAmount,
   openingIsActive,
   openingIsPassage,
@@ -115,6 +117,7 @@ import {
   openingDeviceClassPatch,
   renderRipple,
   renderFurniture,
+  shownPieces,
   renderTracker,
   renderArea,
   renderAreaBorder,
@@ -151,9 +154,11 @@ import {
   normalizeOverlayScale,
   normalizeOverlayMinWidth,
   overlayLength,
+  wallThickness,
   polygonCentroid,
   pointInPolygon,
 } from "./render";
+import { autoLabelKey, measureLabelScene, rectToBox, type LabelSide } from "./label-placement";
 import { deadSpacesCached } from "./dead-space";
 import { cssColor, cssColorOr, cssNumber, contrastText } from "./css-safe";
 import {
@@ -351,6 +356,10 @@ const switcherHandleHome = (w: number, h: number) => ({ x: w * 0.93, y: h * 0.08
  * drag for the switcher.
  */
 const DRAG_SLOP = 4;
+/** Degrees within which a spot being aimed settles on the nearest 45° (issue #388). */
+const SPOT_AIM_SNAP = 4;
+/** How far inside the plan's edge a spot's aiming handle stays. */
+const SPOT_AIM_INSET = 12;
 const AREA_DRAG_HOLD_MS = 200;
 
 /** Icon shown in the Element header per selected element kind. */
@@ -380,6 +389,8 @@ interface Drag {
   areaEdge?: number;
   /** Set when dragging one end of an LED strip device (issue #298). */
   stripEnd?: 1 | 2;
+  /** Set when dragging a spot's aiming handle (issue #388). */
+  spotAim?: boolean;
   /**
    * Whether this strip drag may choose the lit side — only while the device
    * has none of its own, so a side someone picked is never overridden.
@@ -690,6 +701,20 @@ export class FloorplanCardEditor extends LitElement {
   /** Move mode's drag: where it started and where the template was then. */
   private _traceDrag: { pointerId: number; start: TracePoint; x0: number; y0: number } | null =
     null;
+  /**
+   * `labelPosition: auto` on the canvas: the side each auto label was given
+   * here. The editor runs the card's own chooser over its own canvas
+   * (label-placement.ts) rather than asking the card, so it is an
+   * approximation of the card's choice, not a copy of it: the canvas draws no
+   * room names, it is never rotated or projected, label-only devices keep a
+   * ghost badge, and a device with no card label is measured by its dim
+   * stand-in. On a plain 2D plan it lands on the same side.
+   */
+  private _autoSides = new Map<string, LabelSide>();
+  private _autoLabelSig: string[] = [];
+  private _autoLayoutKey?: string;
+  private _autoLayoutConfig?: unknown;
+  private _autoLayoutSerial = 0;
   /** Live touch points on the canvas wrap, for pinch-zoom (issue #38). */
   private _pinchPts = new Map<number, { x: number; y: number }>();
   /** Pinch baseline: finger distance, zoom, and centroid (content coords) at pinch start. */
@@ -881,6 +906,62 @@ export class FloorplanCardEditor extends LitElement {
 
   // ---- active floor access -----------------------------------------------
 
+  /**
+   * Place the canvas's `labelPosition: auto` labels, as the card does (see its
+   * `_syncAutoLabels`): only when the config, floor, zoom or a label's length
+   * changed, reads first and one more render if a side moved.
+   */
+  private _syncAutoLabels(): void {
+    if (this._hideLabels || !this._autoLabelSig.length || !this._config) return;
+    if (this._config !== this._autoLayoutConfig) {
+      this._autoLayoutConfig = this._config;
+      this._autoLayoutSerial++;
+    }
+    const key = `${this._autoLayoutSerial}|${this._activeFloorId}|${this._zoom}|${this._autoLabelSig.join(",")}`;
+    if (key === this._autoLayoutKey) return;
+    const stage = this.renderRoot.querySelector<HTMLElement>(".stage");
+    const overlay = stage?.querySelector<HTMLElement>(":scope > .items");
+    if (!stage || !overlay) return;
+    const r = overlay.getBoundingClientRect();
+    if (!(r.width > 0 && r.height > 0)) return;
+    this._autoLayoutKey = key;
+    const c = this._config;
+    const floor = this._floor();
+    const sx = r.width / cssNumber(c.width, DEFAULT_WIDTH);
+    const sy = r.height / cssNumber(c.height, DEFAULT_HEIGHT);
+    const generated = floor.areas.flatMap((a) => rectAreaSideWalls(a.id, a.points, a.sideWalls ?? {}));
+    const walls = [...floor.walls, ...generated].map((w) => ({
+      x1: r.left + w.x1 * sx,
+      y1: r.top + w.y1 * sy,
+      x2: r.left + w.x2 * sx,
+      y2: r.top + w.y2 * sy,
+      half: (wallThickness(w.thickness) * sx) / 2,
+    }));
+    const sides = measureLabelScene({
+      items: [...overlay.querySelectorAll<HTMLElement>(":scope > .edit-item")],
+      autoKey: (el) => el.dataset.labelAuto,
+      solid: (el) => el.querySelector(":scope > .badge, :scope > .stack .badge"),
+      label: (el) => el.querySelector<HTMLElement>(":scope > .ilabel"),
+      current: this._autoSides,
+      marks: [...overlay.querySelectorAll(":scope > .shutter-mark")],
+      names: [...overlay.querySelectorAll(":scope > .edit-text")],
+      openings: [...stage.querySelectorAll("svg .fp-opening:not(.fp-opening-skylight)")],
+      walls,
+      bounds: rectToBox(stage.getBoundingClientRect()),
+      scalePlan: stage.classList.contains("scale-plan"),
+    });
+    // Forget the sides of labels no longer on the canvas.
+    for (const k of [...this._autoSides.keys()]) if (!sides.has(k)) this._autoSides.delete(k);
+    let changed = false;
+    for (const [k, side] of sides) {
+      if (this._autoSides.get(k) !== side) {
+        this._autoSides.set(k, side);
+        changed = true;
+      }
+    }
+    if (changed) this.requestUpdate();
+  }
+
   private _floor(): Floor {
     const floors = this._config.floors ?? [];
     return floors.find((f) => f.id === this._activeFloorId) ?? floors[0];
@@ -944,6 +1025,9 @@ export class FloorplanCardEditor extends LitElement {
         const selectionPreview = this._mobileInspector && !this._projectOpen && this._primary()
           && side && this._canvasWrap && side.getBoundingClientRect().top >= this._canvasWrap.getBoundingClientRect().bottom;
         if (this._fitToViewport && this._gesturePointer === null && !selectionPreview) this._fitView();
+        // The canvas changed size: auto labels measure again.
+        this._autoLayoutKey = undefined;
+        void this.updateComplete.then(() => this._syncAutoLabels());
         void this.updateComplete.then(() => this._keepSelectionInPreview());
       });
       this._canvasResize.observe(this._canvasWrap);
@@ -1075,6 +1159,7 @@ export class FloorplanCardEditor extends LitElement {
    * fallback, which is already correct on the mobile dialog (transform: none).
    */
   protected updated(): void {
+    this._syncAutoLabels();
     // Re-asserted on every render while fullscreen (not just the transition):
     // idempotent via :popover-open, and it self-heals if the browser
     // force-hid the popover, e.g. across a disconnect/reconnect.
@@ -1966,7 +2051,8 @@ export class FloorplanCardEditor extends LitElement {
     endpoint?: 1 | 2,
     areaVertex?: number,
     areaEdge?: number,
-    stripEnd?: 1 | 2
+    stripEnd?: 1 | 2,
+    spotAim?: boolean
   ): void {
     if (this._tool !== "select") return;
     ev.stopPropagation();
@@ -1975,7 +2061,7 @@ export class FloorplanCardEditor extends LitElement {
     // Endpoint/vertex/edge handles always operate on that single element; every
     // other click goes through the overlap-aware picker (issue #52).
     const explicitHandle =
-      endpoint != null || areaVertex != null || areaEdge != null || stripEnd != null;
+      endpoint != null || areaVertex != null || areaEdge != null || stripEnd != null || !!spotAim;
     const pick = explicitHandle ? sel : this._resolvePick(ev, sel);
     if (explicitHandle) this._selectOne(pick);
     else this._selectForPointer(ev, pick);
@@ -1996,6 +2082,7 @@ export class FloorplanCardEditor extends LitElement {
       areaVertex,
       areaEdge,
       stripEnd,
+      spotAim,
     };
     if (pick.kind === "wall") this._drag.attached = this._attachedCorners(pick.id, endpoint);
     if (stripEnd && pick.kind === "item")
@@ -2197,6 +2284,20 @@ export class FloorplanCardEditor extends LitElement {
             : undefined;
       }
       this._emitFloor({ items: f.items.map((i) => (i.id === it.id ? { ...i, ...next } : i)) });
+      return;
+    }
+
+    // A spot's aiming handle (issue #388): the cone turns to point at the
+    // pointer, in whole degrees, and settles on the nearest 45° when close to
+    // it so a beam aims squarely along or across a room.
+    if (drag.primary.kind === "item" && drag.spotAim) {
+      const it = f.items.find((i) => i.id === drag.primary.id);
+      if (!it || Math.hypot(p.x - it.x, p.y - it.y) < 1) return;
+      const deg = (Math.atan2(p.x - it.x, -(p.y - it.y)) * 180) / Math.PI;
+      let bearing = Math.round(((deg % 360) + 360) % 360);
+      const square = Math.round(bearing / 45) * 45;
+      if (!p.altKey && Math.abs(bearing - square) <= SPOT_AIM_SNAP) bearing = square % 360;
+      this._emitFloor({ items: f.items.map((i) => (i.id === it.id ? { ...i, glowDirection: bearing } : i)) });
       return;
     }
 
@@ -3240,13 +3341,14 @@ export class FloorplanCardEditor extends LitElement {
     // What it is, and how it is drawn.
     // `width` and `ceilingHeight` are the skylight's two; `openingForm` only
     // offers them for one, so they cost every other opening nothing but a
-    // name in this list.
+    // name in this list. `sill` is the same for a window.
     ["Shape", [
       "type",
       "motion",
       "length",
       "width",
       "ceilingHeight",
+      "sill",
       "sash",
       "sashSpan",
       "hinge",
@@ -4691,6 +4793,8 @@ export class FloorplanCardEditor extends LitElement {
     // The canvas follows HA's light/dark mode too, so what you trace over is
     // what the card will show (issue #366).
     const bgImage = floorImage(floor, hassDarkMode(this.hass));
+    // Refilled by _renderItemOverlay: what the auto labels on show say.
+    this._autoLabelSig = [];
     const floors = c.floors ?? [];
     const generatedWallSegments = this._roomWallSegments(floor);
     const blockingWallSegments = wallsThatBlock([...floor.walls, ...generatedWallSegments]);
@@ -5236,8 +5340,13 @@ export class FloorplanCardEditor extends LitElement {
                   const r = cssNumber(it.glowRadius, DEFAULT_GLOW_RADIUS);
                   // A strip's guide is its pool's own outline (issue #298).
                   const run = stripRun(it);
-                  return run
-                    ? svg`<path class="glow-guide" d=${stripOutline(run, r)} />`
+                  if (run) return svg`<path class="glow-guide" d=${stripOutline(run, r)} />`;
+                  // A spot's guide is its cone (issue #388).
+                  const cone = spotCone(it);
+                  return cone
+                    ? svg`<polygon class="glow-guide"
+                                   points=${conePoints(it.x, it.y, r, cone.bearing, cone.width / 2)
+                                     .map((p) => `${p.x},${p.y}`).join(" ")} />`
                     : svg`<circle class="glow-guide" cx=${it.x} cy=${it.y} r=${r} />`;
                 })
               }
@@ -5261,6 +5370,7 @@ export class FloorplanCardEditor extends LitElement {
                 )}
               </g>
               ${floor.items.map((it) => this._renderStripSel(it))}
+              ${floor.items.map((it) => this._renderSpotAim(it))}
               ${repeat(
                 // Keyed by id: switching floors must create fresh DOM. Reused
                 // nodes would CSS-transition from the previous floor's opening
@@ -6052,6 +6162,32 @@ export class FloorplanCardEditor extends LitElement {
   }
 
   /**
+   * The aiming handle of a selected spot (issue #388): a handle at the tip of
+   * its cone, on the guide, that turns the cone to follow the pointer.
+   */
+  private _renderSpotAim(it: FloorItem): TemplateResult | typeof nothing {
+    if (!it.glow || !this._isSel("item", it.id) || it.locked) return nothing;
+    const cone = spotCone(it);
+    if (!cone) return nothing;
+    const a = (cone.bearing * Math.PI) / 180;
+    const dx = Math.sin(a);
+    const dy = -Math.cos(a);
+    // At the tip of the guide, unless that is off the plan — a long throw from
+    // near a wall — when it is pulled in along the beam to stay in reach.
+    const c = this._config;
+    const toEdge = (p: number, d: number, max: number) =>
+      d > 1e-9 ? (max - SPOT_AIM_INSET - p) / d : d < -1e-9 ? (SPOT_AIM_INSET - p) / d : Infinity;
+    const t = Math.max(
+      SPOT_AIM_INSET,
+      Math.min(cssNumber(it.glowRadius, DEFAULT_GLOW_RADIUS), toEdge(it.x, dx, c.width), toEdge(it.y, dy, c.height)),
+    );
+    return svg`<circle class="handle spot-aim" r="7"
+                       cx=${it.x + dx * t} cy=${it.y + dy * t}
+                       @pointerdown=${(e: PointerEvent) =>
+                         this._startDrag(e, { kind: "item", id: it.id }, undefined, undefined, undefined, undefined, true)} />`;
+  }
+
+  /**
    * An LED strip's run (issue #298), and — while its device is selected — a
    * handle on each end, dragged like a wall's. The device's own icon still
    * selects and moves it; the run follows because it is centred on the icon.
@@ -6252,7 +6388,12 @@ export class FloorplanCardEditor extends LitElement {
     return svg`
       <g class="furn-hit ${selected ? "selected" : ""}"
          @pointerdown=${(e: PointerEvent) => this._startDrag(e, { kind: "furniture", id: f.id })}>
-        ${renderFurniture(f, undefined, this._symbols())}
+        ${
+          // A center curtain previews as its pair, at full size: no cover
+          // state in the editor, so each half is drawn fully across (#196).
+          shownPieces({ ...f, entity: undefined }, undefined, this._symbols())
+            .map((p) => renderFurniture({ ...p, entity: f.entity }, undefined, this._symbols()))
+        }
         ${
           selected
             ? svg`<rect x=${f.x - f.w / 2 - 4} y=${f.y - f.h / 2 - 4}
@@ -6641,9 +6782,17 @@ export class FloorplanCardEditor extends LitElement {
     // #55). The editor must still show them — dimmed — or they could never be
     // found and edited again.
     const hiddenOnCard = itemHiddenWhenInactive(it, st?.state, this.hass);
+    // An auto label shows the side this canvas measured for it (see
+    // _syncAutoLabels), `below` until it has been measured.
+    const position = labelPositionOf(it);
+    const autoKey = position === "auto" ? autoLabelKey(it) : undefined;
+    const labelSide: LabelSide =
+      autoKey === undefined ? (position as LabelSide) : this._autoSides.get(autoKey) ?? "below";
+    if (autoKey !== undefined && !this._hideLabels) this._autoLabelSig.push(`${autoKey}:${label.length}`);
     return html`
       <div
         class="edit-item ${selected ? "selected" : ""} ${hiddenOnCard ? "card-hidden" : ""}"
+        data-label-auto=${autoKey ?? nothing}
         style="left:${(it.x / c.width) * 100}%; top:${(it.y / c.height) * 100}%;"
         @pointerdown=${(e: PointerEvent) => this._onOverlayDown(e, { kind: "item", id: it.id })}
         @pointermove=${this._onOverlayMove}
@@ -6659,7 +6808,7 @@ export class FloorplanCardEditor extends LitElement {
         ${this._hideLabels
         ? nothing
         : html`<span
-            class="ilabel ${cardLabel ? "live" : ""} ilabel-${labelPositionOf(it)}"
+            class="ilabel ${cardLabel ? "live" : ""} ilabel-${labelSide}"
             style="font-size:${overlayLength(
               cardLabel || it.labelSize != null ? itemLabelSize(it.labelSize) : 11,
               scale
@@ -8885,6 +9034,10 @@ export class FloorplanCardEditor extends LitElement {
     .stage.scale-plan .ilabel-right {
       left: calc(100% + 0.33em);
     }
+    .stage.scale-plan .ilabel-above {
+      top: auto;
+      bottom: calc(100% + 0.17em);
+    }
     /* Preview of the card's shutter badge. Inherits .items' pointer-events:
        none — the opening underneath stays clickable for selection and drag. */
     .shutter-mark {
@@ -9374,6 +9527,10 @@ export class FloorplanCardEditor extends LitElement {
     }
     .ilabel-right {
       left: calc(100% + 4px);
+    }
+    .ilabel-above {
+      top: auto;
+      bottom: calc(100% + 2px);
     }
     /* The card's own label line, drawn as the card draws it (issue #135):
        full-strength ink, and no width clamp — the card has none, and clipping
